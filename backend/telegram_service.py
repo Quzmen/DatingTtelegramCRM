@@ -22,7 +22,10 @@ database.get_db/SessionLocal). После успешного входа пере
 """
 import asyncio
 import logging
+import os
+import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -572,6 +575,7 @@ class TelegramService:
 
         file_arg = file_path
         used_cache = False
+        normalized_path: Optional[Path] = None
         if cached_file_id:
             try:
                 file_arg = self._build_input_media(cached_file_id)
@@ -579,6 +583,32 @@ class TelegramService:
             except Exception:
                 logger.warning("send_file: не удалось разобрать cached_file_id %r, отправляю с диска", cached_file_id)
                 file_arg = file_path
+
+        if not used_cache and kind == "photo" and Path(file_path).suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            # Telethon решает "фото или документ" не только по нашему
+            # force_document=False, а ЕЩЁ И по собственной проверке
+            # расширения файла (utils.is_image) — со своим списком,
+            # который уже нашего PHOTO_EXTS в media_manager.py и не
+            # знает про .jfif/.webp/.heic/.bmp. Если расширение не из
+            # её списка, Telethon отправит файл как обычный документ,
+            # ДАЖЕ ПРИ force_document=False — снаружи (в Telegram)
+            # это выглядит один в один как исходный баг: карточка
+            # файла вместо фото, хотя kind у нас определился верно.
+            # Подстраховываемся временной копией с ".jpg" — байты не
+            # трогаем, Telegram сам разбирает реальное содержимое при
+            # обработке фото на сервере, расширение тут используется
+            # только Telethon-ом как локальная эвристика на клиенте.
+            try:
+                normalized_path = config.UPLOAD_TMP_DIR / f"tg_photo_{uuid.uuid4().hex}.jpg"
+                try:
+                    os.link(file_path, normalized_path)
+                except OSError:
+                    shutil.copy2(file_path, normalized_path)
+                file_arg = str(normalized_path)
+            except Exception:
+                logger.warning("send_file: не удалось подготовить временную копию с .jpg для %s", file_path)
+                file_arg = file_path
+                normalized_path = None
 
         try:
             try:
@@ -596,6 +626,9 @@ class TelegramService:
                 )
         except ValueError:
             raise TelegramAuthError("Не удалось найти этого пользователя в Telegram")
+        finally:
+            if normalized_path is not None:
+                normalized_path.unlink(missing_ok=True)
         return {
             "id": msg.id, "dialog_id": telegram_id, "text": msg.message or "", "date": msg.date, "out": True,
             "status": "sent",
