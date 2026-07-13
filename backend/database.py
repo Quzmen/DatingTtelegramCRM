@@ -1,32 +1,71 @@
 """
 Database configuration.
 
-SQLite database file lives in /data/crm.db, next to the project root,
-so it's easy to find, back up, or delete without touching any code.
+Supports:
+- SQLite locally (/data/crm.db)
+- PostgreSQL in production via DATABASE_URL environment variable
 """
+
+import os
 from pathlib import Path
+
+import sqlalchemy as sa
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-DATABASE_URL = f"sqlite:///{DATA_DIR / 'crm.db'}"
 
-# check_same_thread=False is required because FastAPI can use the
-# connection from different threads within the same request lifecycle.
-engine = create_engine(
-    DATABASE_URL, connect_args={"check_same_thread": False}
+# PostgreSQL from Render/Supabase
+# If missing -> fallback to SQLite
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if not DATABASE_URL:
+    DATABASE_URL = f"sqlite:///{DATA_DIR / 'crm.db'}"
+
+
+# Render can provide postgres://
+# SQLAlchemy 2.x requires postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://",
+        "postgresql://",
+        1
+    )
+
+
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={
+            "check_same_thread": False
+        }
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300
+    )
+
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
 )
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
 
 def get_db():
-    """FastAPI dependency that yields a DB session and always closes it."""
+    """
+    FastAPI dependency.
+    Creates DB session and closes it after request.
+    """
     db = SessionLocal()
     try:
         yield db
@@ -35,24 +74,24 @@ def get_db():
 
 
 def run_migrations():
-    """Лёгкая авто-миграция для SQLite.
-
-    ``Base.metadata.create_all`` создаёт только отсутствующие таблицы
-    целиком и не умеет добавлять новые колонки в уже существующую
-    таблицу. Если пользователь обновляет CRM с более ранней версии
-    (когда AI-полей у Contact ещё не было), файл data/crm.db уже
-    существует, и без этой миграции новые колонки просто не появятся.
-
-    SQLite поддерживает ``ALTER TABLE ... ADD COLUMN`` — этого
-    достаточно, чтобы аккуратно докатить новые поля без пересоздания БД.
     """
-    import sqlalchemy as sa
+    Lightweight migration for adding new Contact columns.
+
+    Works with existing SQLite database.
+    For PostgreSQL normally columns are created by
+    Base.metadata.create_all().
+    """
 
     inspector = sa.inspect(engine)
+
     if "contacts" not in inspector.get_table_names():
         return
 
-    existing_columns = {c["name"] for c in inspector.get_columns("contacts")}
+    existing_columns = {
+        c["name"]
+        for c in inspector.get_columns("contacts")
+    }
+
     new_columns = {
         "interest_score": "INTEGER DEFAULT 0",
         "interest_category": "VARCHAR(50)",
@@ -72,4 +111,8 @@ def run_migrations():
     with engine.begin() as conn:
         for column_name, ddl_type in new_columns.items():
             if column_name not in existing_columns:
-                conn.execute(sa.text(f"ALTER TABLE contacts ADD COLUMN {column_name} {ddl_type}"))
+                conn.execute(
+                    sa.text(
+                        f"ALTER TABLE contacts ADD COLUMN {column_name} {ddl_type}"
+                    )
+                )
