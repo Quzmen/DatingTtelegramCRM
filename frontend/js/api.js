@@ -54,6 +54,19 @@ const API = (() => {
     getTags: () => request(`/tags`),
     getStatuses: () => request(`/statuses`),
 
+    // folders (сегменты диалогов)
+    listFolders: () => request(`/folders`),
+    createFolder: (data) => request(`/folders`, { method: "POST", body: JSON.stringify(data) }),
+    updateFolder: (id, data) => request(`/folders/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteFolder: (id) => request(`/folders/${id}`, { method: "DELETE" }),
+    reorderFolders: (orderedIds) =>
+      request(`/folders/reorder`, { method: "POST", body: JSON.stringify({ ordered_ids: orderedIds }) }),
+    assignDialogsToFolder: (telegramIds, folderId) =>
+      request(`/folders/assign`, {
+        method: "POST",
+        body: JSON.stringify({ telegram_ids: telegramIds, folder_id: folderId }),
+      }),
+
     // contact intelligence (AI-анализ)
     analyzeContact: (id) => request(`/contacts/${id}/analyze`, { method: "POST" }),
     generateDeepReport: (id) => request(`/contacts/${id}/deep-report`, { method: "POST" }),

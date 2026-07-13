@@ -166,6 +166,24 @@ class TelegramSettings(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class Folder(Base):
+    """Пользовательская папка (сегмент) для организации диалогов —
+    например 🔥 Приоритет, ⏳ Жду ответа. Ни к чему в Telegram не
+    привязана, существует только внутри CRM: один диалог (Dialog)
+    может лежать максимум в одной папке за раз (см. Dialog.folder_id),
+    как в нативных папках Telegram Desktop."""
+    __tablename__ = "folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(60), nullable=False)
+    color = Column(String(20), nullable=False, default="#6C8EF5")   # hex-код акцентного цвета
+    icon = Column(String(16), nullable=True)                        # emoji, напр. "🔥"
+    position = Column(Integer, nullable=False, default=0, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    dialogs = relationship("Dialog", back_populates="folder")
+
+
 class Dialog(Base):
     """Локальное зеркало списка диалогов Telegram (левая колонка
     мессенджера). Раньше этот список каждый раз запрашивался у Telegram
@@ -184,6 +202,7 @@ class Dialog(Base):
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)  # id собеседника
     contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    folder_id = Column(Integer, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True)
 
     last_message_id = Column(Integer, nullable=True)
     last_message_text = Column(Text, nullable=True)
@@ -197,6 +216,7 @@ class Dialog(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     contact = relationship("Contact")
+    folder = relationship("Folder", back_populates="dialogs")
 
 
 class Message(Base):

@@ -157,6 +157,10 @@ const ChatView = (() => {
       if (q && !d.name.toLowerCase().includes(q) && !(d.username || "").toLowerCase().includes(q)) return false;
       if (listFilter === "unread") return d.unread_count > 0;
       if (listFilter === "pinned") return d.pinned;
+      if (typeof listFilter === "string" && listFilter.startsWith("folder:")) {
+        const folderId = Number(listFilter.slice("folder:".length));
+        return d.folder_id === folderId;
+      }
       return true;
     });
     items = [...items].sort((a, b) => (b.pinned - a.pinned));
@@ -182,12 +186,25 @@ const ChatView = (() => {
                 ${d.unread_count ? `<span class="chitem__unread">${d.unread_count}</span>` : ""}
               </div>
             </div>
+            <button class="chitem__folderbtn" data-move-id="${d.telegram_id}" title="Переместить в папку">⋯</button>
           </div>`;
       }).join("");
     }
 
     container.querySelectorAll(".chitem").forEach((el) => {
-      el.addEventListener("click", () => selectChat(Number(el.dataset.chatId)));
+      el.addEventListener("click", (e) => {
+        if (e.target.closest(".chitem__folderbtn")) return;
+        selectChat(Number(el.dataset.chatId));
+      });
+    });
+    container.querySelectorAll(".chitem__folderbtn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const rect = btn.getBoundingClientRect();
+        document.dispatchEvent(new CustomEvent("chatlist:move-request", {
+          detail: { telegramId: Number(btn.dataset.moveId), x: rect.left, y: rect.bottom },
+        }));
+      });
     });
 
     const totalUnread = dialogs.reduce((sum, d) => sum + (d.unread_count || 0), 0);
@@ -985,6 +1002,7 @@ const ChatView = (() => {
       btn.addEventListener("click", () => {
         listFilter = btn.dataset.chatfilter;
         document.querySelectorAll(".chatlist__tab").forEach((b) => b.classList.toggle("is-active", b === btn));
+        document.querySelectorAll(".folderpill").forEach((b) => b.classList.remove("is-active"));
         renderList();
       });
     });
@@ -1121,5 +1139,17 @@ const ChatView = (() => {
     startPolling();
   }
 
-  return { render, stopPolling, openDialog: selectChat };
+  // Используется folders.js: переключение фильтра списка диалогов на
+  // конкретную папку (или обратно на "Все"/"Непрочитанные"/"Избранное")
+  // без необходимости знать о внутреннем состоянии этого модуля.
+  function setListFilter(value) {
+    listFilter = value;
+    renderList();
+  }
+
+  return {
+    render, stopPolling, openDialog: selectChat,
+    setListFilter,
+    refreshDialogs,
+  };
 })();

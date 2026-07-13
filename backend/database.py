@@ -130,3 +130,12 @@ def run_migrations():
         if telegram_id_column is not None and str(telegram_id_column["type"]).upper() == "INTEGER":
             with engine.begin() as conn:
                 conn.execute(sa.text("ALTER TABLE contacts ALTER COLUMN telegram_id TYPE BIGINT"))
+
+    # Папки (сегменты) диалогов — folders создаётся автоматически через
+    # create_all (новая таблица), а вот dialogs.folder_id нужно долить
+    # существующим базам вручную, как и остальные колонки выше.
+    if "dialogs" in inspector.get_table_names():
+        dialog_columns = {c["name"] for c in inspector.get_columns("dialogs")}
+        if "folder_id" not in dialog_columns:
+            with engine.begin() as conn:
+                conn.execute(sa.text("ALTER TABLE dialogs ADD COLUMN folder_id INTEGER"))

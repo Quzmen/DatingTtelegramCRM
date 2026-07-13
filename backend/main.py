@@ -18,7 +18,7 @@ from telethon.errors import AuthKeyUnregisteredError
 
 from . import models
 from .database import engine, run_migrations
-from .routers import contacts, dashboard, telegram, admin
+from .routers import contacts, dashboard, telegram, admin, folders
 from .telegram_service import telegram_service
 
 logger = logging.getLogger("telegram-crm")
@@ -32,6 +32,7 @@ app.include_router(contacts.router)
 app.include_router(dashboard.router)
 app.include_router(telegram.router)
 app.include_router(admin.router)
+app.include_router(folders.router)
 
 
 @app.on_event("startup")

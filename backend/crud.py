@@ -369,8 +369,102 @@ def get_dashboard(db: Session) -> schemas.DashboardOut:
 # и Dashboard, и статус "Требуют внимания".
 # ---------------------------------------------------------------
 
+# ---------------------------------------------------------------
+# Папки (сегменты) диалогов
+# ---------------------------------------------------------------
+
+def _folder_with_count(db: Session, folder: models.Folder) -> schemas.FolderOut:
+    count = db.query(models.Dialog).filter(models.Dialog.folder_id == folder.id).count()
+    out = schemas.FolderOut.model_validate(folder)
+    out.dialog_count = count
+    return out
+
+
+def list_folders(db: Session) -> List[schemas.FolderOut]:
+    folders = db.query(models.Folder).order_by(models.Folder.position, models.Folder.id).all()
+    return [_folder_with_count(db, f) for f in folders]
+
+
+def create_folder(db: Session, data: schemas.FolderCreate) -> schemas.FolderOut:
+    max_position = db.query(models.Folder).count()
+    folder = models.Folder(
+        name=data.name.strip(),
+        color=data.color or "#6C8EF5",
+        icon=data.icon,
+        position=max_position,
+    )
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return _folder_with_count(db, folder)
+
+
+def get_folder(db: Session, folder_id: int) -> Optional[models.Folder]:
+    return db.query(models.Folder).filter(models.Folder.id == folder_id).first()
+
+
+def update_folder(db: Session, folder: models.Folder, data: schemas.FolderUpdate) -> schemas.FolderOut:
+    if data.name is not None:
+        folder.name = data.name.strip()
+    if data.color is not None:
+        folder.color = data.color
+    if data.icon is not None:
+        folder.icon = data.icon
+    db.commit()
+    db.refresh(folder)
+    return _folder_with_count(db, folder)
+
+
+def delete_folder(db: Session, folder: models.Folder) -> None:
+    # Диалоги, лежавшие в папке, не удаляются -- просто теряют
+    # привязку (folder_id -> NULL), см. ondelete="SET NULL" в models.
+    db.query(models.Dialog).filter(models.Dialog.folder_id == folder.id).update({"folder_id": None})
+    db.delete(folder)
+    db.commit()
+
+
+def reorder_folders(db: Session, ordered_ids: List[int]) -> List[schemas.FolderOut]:
+    folders = {f.id: f for f in db.query(models.Folder).all()}
+    for position, folder_id in enumerate(ordered_ids):
+        folder = folders.get(folder_id)
+        if folder is not None:
+            folder.position = position
+    db.commit()
+    return list_folders(db)
+
+
+def assign_dialogs_to_folder(db: Session, telegram_ids: List[int], folder_id: Optional[int]) -> int:
+    """Перекладывает один или несколько диалогов в папку (или убирает
+    из папки, если folder_id is None). Если для какого-то telegram_id
+    ещё нет строки Dialog (диалог не попадал в полную/живую синхронизацию),
+    создаёт её -- иначе перенос в папку "потерялся" бы молча."""
+    moved = 0
+    for tg_id in telegram_ids:
+        dialog = get_dialog_by_telegram_id(db, tg_id)
+        if dialog is None:
+            dialog = models.Dialog(telegram_id=tg_id)
+            db.add(dialog)
+        dialog.folder_id = folder_id
+        moved += 1
+    db.commit()
+    return moved
+
+
 def get_dialog_by_telegram_id(db: Session, telegram_id: int) -> Optional[models.Dialog]:
     return db.query(models.Dialog).filter(models.Dialog.telegram_id == telegram_id).first()
+
+
+def get_folder_ids_by_telegram_id(db: Session) -> dict:
+    """telegram_id -> folder_id для всех диалогов, у которых есть
+    папка. Один запрос вместо похода в БД на каждый диалог из
+    списка, который каждый раз приходит напрямую из Telegram API
+    (см. routers/telegram.list_dialogs)."""
+    rows = (
+        db.query(models.Dialog.telegram_id, models.Dialog.folder_id)
+        .filter(models.Dialog.folder_id.isnot(None))
+        .all()
+    )
+    return {tg_id: folder_id for tg_id, folder_id in rows}
 
 
 def touch_contact_last_contact(db: Session, telegram_id: int, when: datetime) -> None:

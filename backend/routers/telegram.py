@@ -89,11 +89,25 @@ async def resolve_username(data: schemas.TelegramResolveIn):
 # ---------------------------------------------------------------
 
 @router.get("/dialogs", response_model=List[schemas.TelegramDialogOut])
-async def list_dialogs(limit: int = 100):
+async def list_dialogs(limit: int = 100, folder_id: Optional[int] = None, db: Session = Depends(get_db)):
     try:
-        return await telegram_service.list_dialogs(limit=limit)
+        dialogs = await telegram_service.list_dialogs(limit=limit)
     except TelegramAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+    # Список диалогов приходит напрямую из Telegram API (см.
+    # TelegramService.list_dialogs) и ничего не знает про папки CRM --
+    # они хранятся отдельно в локальной таблице dialogs (models.Dialog).
+    # Дозаполняем folder_id одним запросом и, если папка запрошена,
+    # фильтруем результат по ней.
+    folder_map = crud.get_folder_ids_by_telegram_id(db)
+    for d in dialogs:
+        d["folder_id"] = folder_map.get(d["telegram_id"])
+
+    if folder_id is not None:
+        dialogs = [d for d in dialogs if d["folder_id"] == folder_id]
+
+    return dialogs
 
 
 @router.get("/presence/{telegram_id}", response_model=schemas.TelegramPresenceOut)

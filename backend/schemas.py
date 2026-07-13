@@ -20,6 +20,41 @@ class TagOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ---------- Folders (сегменты диалогов) ----------
+
+class FolderBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    color: str = Field(default="#6C8EF5", max_length=20)
+    icon: Optional[str] = Field(default=None, max_length=16)
+
+
+class FolderCreate(FolderBase):
+    pass
+
+
+class FolderUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=60)
+    color: Optional[str] = Field(None, max_length=20)
+    icon: Optional[str] = Field(None, max_length=16)
+
+
+class FolderOut(FolderBase):
+    id: int
+    position: int
+    dialog_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FolderReorderIn(BaseModel):
+    ordered_ids: List[int] = Field(..., min_length=1)
+
+
+class FolderAssignIn(BaseModel):
+    telegram_ids: List[int] = Field(..., min_length=1)
+    folder_id: Optional[int] = None  # None -> убрать диалог(и) из папки
+
+
 # ---------- Interactions ----------
 
 class InteractionBase(BaseModel):
@@ -330,6 +365,7 @@ class TelegramDialogOut(BaseModel):
     last_seen: Optional[datetime] = None
     last_seen_kind: str = "unknown"
     typing: bool = False
+    folder_id: Optional[int] = None
 
 
 class TelegramPresenceOut(BaseModel):

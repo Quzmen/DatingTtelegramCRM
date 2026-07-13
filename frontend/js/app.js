@@ -11,7 +11,7 @@ const App = (() => {
     });
 
     if (name === "dashboard") Dashboard.render();
-    if (name === "chat") ChatView.render();
+    if (name === "chat") { ChatView.render(); Folders.load(); }
     if (name === "kanban") Kanban.render();
     if (name === "telegram") Telegram.render();
     if (name !== "contacts") Contacts.stopChatPolling();
@@ -40,6 +40,7 @@ const App = (() => {
 
   async function init() {
     wireNav();
+    Folders.wire();
     await Contacts.init();
     await Dashboard.render();
     switchView("dashboard");
