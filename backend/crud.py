@@ -360,3 +360,161 @@ def get_dashboard(db: Session) -> schemas.DashboardOut:
         needs_attention=needs_attention,
         by_status=by_status,
     )
+
+
+# ---------------------------------------------------------------
+# Кэш диалогов/сообщений (Dialog/Message) — наполняется sync_service
+# из событий Telethon в реальном времени. Это источник правды для
+# "последнего реального события в чате", на который дальше опирается
+# и Dashboard, и статус "Требуют внимания".
+# ---------------------------------------------------------------
+
+def get_dialog_by_telegram_id(db: Session, telegram_id: int) -> Optional[models.Dialog]:
+    return db.query(models.Dialog).filter(models.Dialog.telegram_id == telegram_id).first()
+
+
+def touch_contact_last_contact(db: Session, telegram_id: int, when: datetime) -> None:
+    """Двигает Contact.last_contact_at вперёд при реальном событии в
+    Telegram (входящее/исходящее сообщение). Обновляет только если
+    новое событие свежее того, что уже сохранено — так поздние
+    ретро-синки (full_sync) не затирают более свежие живые события."""
+    contact = (
+        db.query(models.Contact)
+        .filter(models.Contact.telegram_id == telegram_id)
+        .first()
+    )
+    if contact and (contact.last_contact_at is None or contact.last_contact_at < when):
+        contact.last_contact_at = when
+        db.commit()
+
+
+def upsert_dialog(
+    db: Session,
+    telegram_id: int,
+    *,
+    last_message_id: Optional[int] = None,
+    last_message_text: Optional[str] = None,
+    last_message_kind: Optional[str] = None,
+    last_message_date: Optional[datetime] = None,
+    last_message_out: Optional[bool] = None,
+    unread_count: Optional[int] = None,
+    pinned: Optional[bool] = None,
+) -> models.Dialog:
+    """Upsert по telegram_id. Поля, не переданные явно (None), не
+    трогают уже сохранённое значение — так частичные обновления
+    (например, только unread_count из события прочтения) не затирают
+    последний текст сообщения нулями."""
+    dialog = get_dialog_by_telegram_id(db, telegram_id)
+    if dialog is None:
+        dialog = models.Dialog(telegram_id=telegram_id)
+        db.add(dialog)
+
+    contact = (
+        db.query(models.Contact)
+        .filter(models.Contact.telegram_id == telegram_id)
+        .first()
+    )
+    if contact is not None:
+        dialog.contact_id = contact.id
+
+    # Не перетираем более свежее сообщение более старым — full_sync и
+    # живые события могут прийти в любом порядке относительно друг друга.
+    is_newer = (
+        last_message_date is not None
+        and (dialog.last_message_date is None or last_message_date >= dialog.last_message_date)
+    )
+    if is_newer:
+        if last_message_id is not None:
+            dialog.last_message_id = last_message_id
+        if last_message_text is not None:
+            dialog.last_message_text = last_message_text
+        if last_message_kind is not None:
+            dialog.last_message_kind = last_message_kind
+        dialog.last_message_date = last_message_date
+        if last_message_out is not None:
+            dialog.last_message_out = last_message_out
+
+    if unread_count is not None:
+        dialog.unread_count = unread_count
+    if pinned is not None:
+        dialog.pinned = pinned
+
+    db.commit()
+    db.refresh(dialog)
+    return dialog
+
+
+def upsert_message(
+    db: Session,
+    dialog_telegram_id: int,
+    message_id: int,
+    *,
+    text: Optional[str],
+    date: datetime,
+    out: bool,
+    kind: str = "text",
+    duration: Optional[int] = None,
+    status: Optional[str] = None,
+    edited: bool = False,
+) -> models.Message:
+    """Upsert по (dialog_telegram_id, message_id) — источник дедупликации
+    (Баг №2: "возможны дубли"). Повторное событие с тем же id (например,
+    Telethon иногда присылает апдейт дважды при нестабильной сети)
+    обновляет существующую строку вместо создания второй."""
+    msg = (
+        db.query(models.Message)
+        .filter(
+            models.Message.dialog_telegram_id == dialog_telegram_id,
+            models.Message.message_id == message_id,
+        )
+        .first()
+    )
+    if msg is None:
+        msg = models.Message(dialog_telegram_id=dialog_telegram_id, message_id=message_id)
+        db.add(msg)
+
+    msg.text = text
+    msg.date = date
+    msg.out = out
+    msg.kind = kind
+    msg.duration = duration
+    if status is not None:
+        msg.status = status
+    msg.edited = edited
+    msg.deleted = False
+
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def mark_message_deleted(db: Session, dialog_telegram_id: int, message_id: int) -> None:
+    msg = (
+        db.query(models.Message)
+        .filter(
+            models.Message.dialog_telegram_id == dialog_telegram_id,
+            models.Message.message_id == message_id,
+        )
+        .first()
+    )
+    if msg is not None:
+        msg.deleted = True
+        db.commit()
+
+
+def mark_outbox_read(db: Session, dialog_telegram_id: int, max_id: int) -> None:
+    """Событие Telethon events.MessageRead для исходящих: собеседник
+    прочитал все наши сообщения с id <= max_id. Раньше статус
+    ✓/✓✓ пересчитывался только при следующем открытии диалога
+    (get_messages -> _read_outbox_max_id), теперь — сразу по событию."""
+    (
+        db.query(models.Message)
+        .filter(
+            models.Message.dialog_telegram_id == dialog_telegram_id,
+            models.Message.out.is_(True),
+            models.Message.message_id <= max_id,
+            models.Message.status != "read",
+        )
+        .update({"status": "read"}, synchronize_session=False)
+    )
+    db.commit()

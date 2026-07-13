@@ -34,6 +34,20 @@ app.include_router(telegram.router)
 app.include_router(admin.router)
 
 
+@app.on_event("startup")
+async def _sync_telegram_on_startup() -> None:
+    """Если аккаунт уже был авторизован в прошлый раз (сессия лежит в
+    БД -- см. TelegramService._load_session_string), поднимаем кэш
+    диалогов сразу при старте, не дожидаясь первого запроса из
+    фронтенда или первого нового сообщения. Best-effort: если Telegram
+    недоступен или аккаунт ещё не авторизован, просто тихо пропускаем --
+    сервис при этом продолжает нормально стартовать."""
+    try:
+        await telegram_service.sync_now()
+    except Exception:
+        logger.exception("Не удалось выполнить синхронизацию диалогов при старте")
+
+
 @app.exception_handler(AuthKeyUnregisteredError)
 async def _handle_auth_key_unregistered(request: Request, exc: AuthKeyUnregisteredError):
     """Сохранённая StringSession больше не действительна на стороне

@@ -10,7 +10,8 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Text, DateTime, Float, ForeignKey, Table, Enum, func
+    Column, Integer, BigInteger, String, Text, DateTime, Float, Boolean,
+    ForeignKey, Table, Enum, UniqueConstraint, func
 )
 from sqlalchemy.orm import relationship
 
@@ -163,3 +164,61 @@ class TelegramSettings(Base):
     session_string = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class Dialog(Base):
+    """Локальное зеркало списка диалогов Telegram (левая колонка
+    мессенджера). Раньше этот список каждый раз запрашивался у Telegram
+    напрямую (TelegramService.list_dialogs) — здесь же лежит кэш,
+    который поддерживает в актуальном состоянии sync_service, слушая
+    события Telethon (новое сообщение / правка / удаление / прочтение)
+    в реальном времени, а не по запросу пользователя.
+
+    Именно на это поле опирается автоматическое обновление
+    Contact.last_contact_at и, в дальнейшем, статус "Требуют внимания"
+    на Dashboard — раньше last_contact_at обновлялся только вручную
+    (из crud.add_interaction или кликом во фронтенде) и был не связан
+    с реальной перепиской в Telegram."""
+    __tablename__ = "dialogs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)  # id собеседника
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    last_message_id = Column(Integer, nullable=True)
+    last_message_text = Column(Text, nullable=True)
+    last_message_kind = Column(String(30), nullable=True)          # text/photo/voice/video_note/...
+    last_message_date = Column(DateTime, nullable=True)
+    last_message_out = Column(Boolean, nullable=False, default=False)
+
+    unread_count = Column(Integer, nullable=False, default=0)
+    pinned = Column(Boolean, nullable=False, default=False)
+
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    contact = relationship("Contact")
+
+
+class Message(Base):
+    """Локальный кэш отдельных сообщений по каждому диалогу.
+
+    dialog_telegram_id + message_id уникальны в паре — это и есть
+    защита от дублей (Баг №2: "возможны дубли"), потому что sync_service
+    всегда делает upsert по этой паре, а не слепой INSERT."""
+    __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint("dialog_telegram_id", "message_id", name="uq_message_dialog_msgid"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    dialog_telegram_id = Column(BigInteger, nullable=False, index=True)
+    message_id = Column(Integer, nullable=False)  # id сообщения внутри чата в Telegram
+
+    text = Column(Text, nullable=True)
+    date = Column(DateTime, nullable=False, index=True)
+    out = Column(Boolean, nullable=False, default=False)
+    kind = Column(String(30), nullable=False, default="text")
+    duration = Column(Integer, nullable=True)          # для voice/video_note, секунды
+    status = Column(String(10), nullable=True)          # sent | read (только для исходящих)
+    edited = Column(Boolean, nullable=False, default=False)
+    deleted = Column(Boolean, nullable=False, default=False)

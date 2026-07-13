@@ -38,18 +38,12 @@ from telethon.errors import (
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.functions.messages import GetPeerDialogsRequest
-from telethon.tl.types import (
-    InputDialogPeer,
-    User,
-    UserStatusOnline,
-    UserStatusOffline,
-    UserStatusRecently,
-    UserStatusLastWeek,
-    UserStatusLastMonth,
-)
+from telethon.tl.types import InputDialogPeer, User
 
 from . import config, crud
+from . import sync_service
 from .database import SessionLocal
+from .telegram_utils import _status_info, _user_out, _media_info
 
 
 class TelegramAuthError(Exception):
@@ -64,97 +58,6 @@ async def _with_timeout(coro, action: str):
             f"Telegram не ответил за {config.CONNECT_TIMEOUT} сек. ({action}). "
             "Проверьте интернет-соединение или настройте прокси (TG_PROXY_HOST)."
         )
-
-
-def _status_info(status) -> dict:
-    """Приводит UserStatus* Telethon к простому и сериализуемому виду."""
-    if isinstance(status, UserStatusOnline):
-        return {"online": True, "last_seen": None, "last_seen_kind": "online"}
-    if isinstance(status, UserStatusOffline):
-        return {"online": False, "last_seen": status.was_online, "last_seen_kind": "exact"}
-    if isinstance(status, UserStatusRecently):
-        return {"online": False, "last_seen": None, "last_seen_kind": "recently"}
-    if isinstance(status, UserStatusLastWeek):
-        return {"online": False, "last_seen": None, "last_seen_kind": "last_week"}
-    if isinstance(status, UserStatusLastMonth):
-        return {"online": False, "last_seen": None, "last_seen_kind": "last_month"}
-    return {"online": False, "last_seen": None, "last_seen_kind": "unknown"}
-
-
-def _user_out(user: User) -> dict:
-    name = " ".join(p for p in [user.first_name, user.last_name] if p) or user.username or str(user.id)
-    return {
-        "telegram_id": user.id,
-        "name": name,
-        "username": user.username,
-        "phone": getattr(user, "phone", None),
-    }
-
-
-def _media_info(m) -> Optional[dict]:
-    """Достаёт из Telethon-сообщения тип вложения и метаданные для UI.
-
-    Порядок проверок важен: video_note и gif — это документы с особыми
-    атрибутами, которые Telethon даёт через отдельные bool-шорткаты
-    (m.video_note / m.gif), и их нужно проверить ДО общих m.video /
-    m.document, иначе кружки и гифки определятся как обычное видео/файл.
-    """
-    if m.photo:
-        return {"kind": "photo", "file_name": None, "size": None, "mime": "image/jpeg", "duration": None}
-    if m.video_note:
-        duration = None
-        try:
-            duration = m.file.duration
-        except Exception:
-            pass
-        return {"kind": "video_note", "file_name": None, "size": m.file.size if m.file else None,
-                "mime": m.file.mime_type if m.file else "video/mp4", "duration": duration}
-    if m.gif:
-        return {"kind": "animation", "file_name": m.file.name if m.file else None,
-                "size": m.file.size if m.file else None,
-                "mime": m.file.mime_type if m.file else "video/mp4", "duration": None}
-    if m.voice:
-        duration = None
-        try:
-            duration = m.file.duration
-        except Exception:
-            pass
-        return {"kind": "voice", "file_name": None, "size": m.file.size if m.file else None,
-                "mime": m.file.mime_type if m.file else "audio/ogg", "duration": duration}
-    if m.audio:
-        duration = None
-        title = None
-        try:
-            duration = m.file.duration
-        except Exception:
-            pass
-        try:
-            title = m.file.title or m.file.name
-        except Exception:
-            pass
-        return {"kind": "audio", "file_name": title or "Аудио", "size": m.file.size if m.file else None,
-                "mime": m.file.mime_type if m.file else "audio/mpeg", "duration": duration}
-    if m.video:
-        duration = None
-        try:
-            duration = m.file.duration
-        except Exception:
-            pass
-        return {"kind": "video", "file_name": m.file.name if m.file else None,
-                "size": m.file.size if m.file else None,
-                "mime": m.file.mime_type if m.file else "video/mp4", "duration": duration}
-    if m.sticker:
-        mime = None
-        try:
-            mime = m.file.mime_type
-        except Exception:
-            pass
-        return {"kind": "sticker", "file_name": None, "size": None, "mime": mime, "duration": None}
-    if m.document:
-        return {"kind": "document", "file_name": m.file.name if m.file else "Файл",
-                "size": m.file.size if m.file else None,
-                "mime": m.file.mime_type if m.file else "application/octet-stream", "duration": None}
-    return None
 
 
 class TelegramService:
@@ -243,10 +146,9 @@ class TelegramService:
         return self._client
 
     async def _register_handlers(self, client: TelegramClient) -> None:
-        """Подписывается на события "печатает"/"в сети" один раз за
-        время жизни клиента, чтобы UI мог опрашивать /presence и
-        получать актуальные статусы без постоянных запросов к Telegram.
-        """
+        """Подписывается на события "печатает"/"в сети" и на события
+        сообщений (см. sync_service.register_message_handlers) один раз
+        за время жизни клиента."""
         if self._handlers_registered:
             return
 
@@ -263,6 +165,8 @@ class TelegramService:
             if status is not None:
                 entry.update(_status_info(status))
 
+        sync_service.register_message_handlers(client)
+
         self._handlers_registered = True
 
     # ---------------------------------------------------------------
@@ -275,6 +179,21 @@ class TelegramService:
             return {"authorized": False, "user": None}
         me = await _with_timeout(client.get_me(), "получение профиля")
         return {"authorized": True, "user": _user_out(me)}
+
+    async def sync_now(self) -> bool:
+        """Полная синхронизация кэша диалогов, без предварительного
+        входа -- используется при старте приложения (main.py), если
+        сессия уже сохранена в БД с прошлого раза. Тихо ничего не
+        делает, если аккаунт не авторизован (например, первый запуск,
+        когда ещё никто не логинился) или Telegram недоступен."""
+        try:
+            client = await self._get_client()
+            if not await client.is_user_authorized():
+                return False
+            await sync_service.full_sync(client)
+            return True
+        except Exception:
+            return False
 
     async def send_code(self, phone: str) -> None:
         client = await self._get_client()
@@ -313,6 +232,7 @@ class TelegramService:
         me = await _with_timeout(client.get_me(), "получение профиля")
         self._phone_code_hash = None
         self._persist_session()
+        await sync_service.full_sync(client)
         return {"authorized": True, "needs_password": False, "user": _user_out(me)}
 
     async def logout(self) -> None:
@@ -589,6 +509,11 @@ class TelegramService:
             await _with_timeout(client.send_read_acknowledge(telegram_id), "отметка о прочтении")
         except Exception:
             pass
+        db = SessionLocal()
+        try:
+            crud.upsert_dialog(db, telegram_id, unread_count=0)
+        finally:
+            db.close()
 
     async def download_media(self, telegram_id: int, message_id: int) -> Path:
         client = await self._get_client()
