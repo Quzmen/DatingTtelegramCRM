@@ -6,6 +6,9 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
+      - key: DATABASE_URL        # строка подключения Supabase Postgres — обязательна,
+        sync: false              # иначе сессия Telegram и данные CRM живут только
+                                  # в SQLite на эфемерном диске контейнера
       - key: APP_USERS          # login:pass,login2:pass2 — задать в Render Dashboard
         sync: false
       - key: AI_PROVIDER

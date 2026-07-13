@@ -4,10 +4,15 @@
 экран "Telegram" в интерфейсе.
 
 CRM работает только с одним авторизованным аккаунтом одновременно —
-это личный локальный инструмент, а не мультиаккаунтный сервис.
-Сессия Telethon сохраняется на диск (config.SESSION_PATH), поэтому
-после первого входа переавторизация не требуется, пока пользователь
-сам не нажмёт "выйти".
+это не мультиаккаунтный сервис.
+
+Сессия Telethon хранится не в файле на диске (файловая система
+контейнера на Render эфемерна и сбрасывается при каждом
+рестарте/редеплое), а как StringSession в таблице telegram_settings
+той же БД, что и остальные данные CRM (см. crud.py,
+database.get_db/SessionLocal). После успешного входа переавторизация
+не требуется, пока пользователь сам не нажмёт "выйти" — сессия
+переживает перезапуски и пересборку контейнера.
 
 Помимо базовой авторизации и отправки текста, сервис умеет то, что
 нужно полноценному мессенджеру поверх Telegram: диалоги, вложения
@@ -21,12 +26,14 @@ from pathlib import Path
 from typing import Optional
 
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from telethon.errors import (
     SessionPasswordNeededError,
     PhoneCodeInvalidError,
     PhoneCodeExpiredError,
     PhoneNumberInvalidError,
     FloodWaitError,
+    AuthKeyUnregisteredError,
 )
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.functions.users import GetFullUserRequest
@@ -41,7 +48,8 @@ from telethon.tl.types import (
     UserStatusLastMonth,
 )
 
-from . import config
+from . import config, crud
+from .database import SessionLocal
 
 
 class TelegramAuthError(Exception):
@@ -161,12 +169,64 @@ class TelegramService:
         self._presence: dict = {}
         self._handlers_registered = False
 
+    @staticmethod
+    def _load_session_string() -> str:
+        """Читает сохранённую StringSession из БД. Пустая строка —
+        как и пустой файл сессии раньше — означает "аккаунт ещё не
+        авторизован", Telethon в этом случае создаёт новую сессию."""
+        db = SessionLocal()
+        try:
+            return crud.get_telegram_session_string(db) or ""
+        finally:
+            db.close()
+
+    def _persist_session(self) -> None:
+        """Сохраняет текущую StringSession клиента в БД — вызывается
+        сразу после успешного /api/telegram/sign-in, чтобы сессия
+        пережила следующий рестарт/редеплой контейнера на Render."""
+        if self._client is None:
+            return
+        session_string = self._client.session.save()
+        if not session_string:
+            return
+        db = SessionLocal()
+        try:
+            crud.save_telegram_session_string(db, session_string)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _clear_persisted_session() -> None:
+        db = SessionLocal()
+        try:
+            crud.clear_telegram_session_string(db)
+        finally:
+            db.close()
+
+    async def invalidate_session(self) -> None:
+        """Вызывается, когда Telegram сообщает, что сохранённая сессия
+        больше не действительна (AuthKeyUnregisteredError — например,
+        аккаунт вышел из этого сеанса вручную через настройки Telegram).
+        Сбрасывает и локальный клиент, и запись в БД, чтобы пользователь
+        увидел экран входа вместо повторяющейся 500-й ошибки."""
+        if self._client is not None:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+        self._client = None
+        self._handlers_registered = False
+        self._phone = None
+        self._phone_code_hash = None
+        self._clear_persisted_session()
+
     async def _get_client(self) -> TelegramClient:
         if self._client is None:
             kwargs = {}
             if config.PROXY:
                 kwargs["proxy"] = config.PROXY
-            self._client = TelegramClient(config.SESSION_PATH, config.API_ID, config.API_HASH, **kwargs)
+            session_string = self._load_session_string()
+            self._client = TelegramClient(StringSession(session_string), config.API_ID, config.API_HASH, **kwargs)
         if not self._client.is_connected():
             try:
                 await asyncio.wait_for(self._client.connect(), timeout=config.CONNECT_TIMEOUT)
@@ -252,6 +312,7 @@ class TelegramService:
 
         me = await _with_timeout(client.get_me(), "получение профиля")
         self._phone_code_hash = None
+        self._persist_session()
         return {"authorized": True, "needs_password": False, "user": _user_out(me)}
 
     async def logout(self) -> None:
@@ -260,6 +321,11 @@ class TelegramService:
             await _with_timeout(client.log_out(), "выход из аккаунта")
         self._phone = None
         self._phone_code_hash = None
+        self._clear_persisted_session()
+        # log_out() уже инвалидировал ключ на стороне Telegram — пересоздаём
+        # клиента с чистой StringSession, чтобы следующий вход начинался с нуля.
+        self._client = None
+        self._handlers_registered = False
 
     # ---------------------------------------------------------------
     # Контакты

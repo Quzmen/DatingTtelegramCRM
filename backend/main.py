@@ -14,9 +14,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from telethon.errors import AuthKeyUnregisteredError
+
 from . import models
 from .database import engine, run_migrations
 from .routers import contacts, dashboard, telegram, admin
+from .telegram_service import telegram_service
 
 logger = logging.getLogger("telegram-crm")
 
@@ -29,6 +32,22 @@ app.include_router(contacts.router)
 app.include_router(dashboard.router)
 app.include_router(telegram.router)
 app.include_router(admin.router)
+
+
+@app.exception_handler(AuthKeyUnregisteredError)
+async def _handle_auth_key_unregistered(request: Request, exc: AuthKeyUnregisteredError):
+    """Сохранённая StringSession больше не действительна на стороне
+    Telegram (например, сессию завершили вручную в настройках Telegram,
+    либо строка была скопирована из другого места окружения). Ловим это
+    централизованно для всех /api/telegram/* эндпоинтов, чтобы вместо
+    вечной 500-й пользователь увидел понятный 401 и экран повторного
+    входа — без него именно так выглядела ошибка из отчёта:
+    AuthKeyUnregisteredError после потери файла сессии при рестарте."""
+    await telegram_service.invalidate_session()
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Сессия Telegram недействительна, войдите заново"},
+    )
 
 
 # ---------------------------------------------------------------

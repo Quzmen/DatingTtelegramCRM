@@ -13,6 +13,31 @@ from . import models, schemas
 ATTENTION_THRESHOLD_DAYS = 7
 
 
+# ---------------------------------------------------------------
+# Telegram StringSession (см. models.TelegramSettings) — одна строка
+# на всё приложение (один Telegram-аккаунт на CRM).
+# ---------------------------------------------------------------
+
+def get_telegram_session_string(db: Session) -> Optional[str]:
+    row = db.query(models.TelegramSettings).order_by(models.TelegramSettings.id).first()
+    return row.session_string if row else None
+
+
+def save_telegram_session_string(db: Session, session_string: str) -> None:
+    row = db.query(models.TelegramSettings).order_by(models.TelegramSettings.id).first()
+    if row:
+        row.session_string = session_string
+    else:
+        row = models.TelegramSettings(session_string=session_string)
+        db.add(row)
+    db.commit()
+
+
+def clear_telegram_session_string(db: Session) -> None:
+    db.query(models.TelegramSettings).delete()
+    db.commit()
+
+
 def _get_or_create_tags(db: Session, names: List[str]) -> List[models.Tag]:
     tags = []
     for raw in names:

@@ -10,7 +10,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, Float, ForeignKey, Table, Enum
+    Column, Integer, String, Text, DateTime, Float, ForeignKey, Table, Enum, func
 )
 from sqlalchemy.orm import relationship
 
@@ -149,3 +149,17 @@ class Interaction(Base):
     event_type = Column(String(50), default="note")  # note, message, meeting, status_change
 
     contact = relationship("Contact", back_populates="interactions")
+
+class TelegramSettings(Base):
+    """Хранит StringSession Telethon в БД (а не в файле на диске), чтобы
+    авторизация переживала перезапуски Render, редеплои и пересборку
+    Docker-контейнера — файловая система контейнера эфемерна, а БД
+    (Supabase Postgres) — нет. Приложение работает с одним Telegram-
+    аккаунтом на CRM, поэтому строк здесь всегда 0 или 1 (см.
+    crud.get_telegram_session_string / save_telegram_session_string)."""
+    __tablename__ = "telegram_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_string = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
