@@ -401,6 +401,7 @@ class MediaFileOut(BaseModel):
     has_thumb: bool = False
     folder_id: Optional[int] = None
     send_count: int = 0
+    last_sent_at: Optional[datetime] = None  # заполняется в crud.list_media_files — дата последней отправки по всем диалогам
     created_at: datetime
     updated_at: datetime
     url: str = ""        # заполняется в crud.media_file_out — прямая ссылка на файл

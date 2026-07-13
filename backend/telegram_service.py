@@ -35,16 +35,17 @@ from telethon.errors import (
     PhoneNumberInvalidError,
     FloodWaitError,
     AuthKeyUnregisteredError,
+    FileReferenceExpiredError,
 )
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.functions.messages import GetPeerDialogsRequest
-from telethon.tl.types import InputDialogPeer, User
+from telethon.tl.types import InputDialogPeer, User, InputPhoto, InputDocument
 
 from . import config, crud
 from . import sync_service
 from .database import SessionLocal
-from .telegram_utils import _status_info, _user_out, _media_info
+from .telegram_utils import _status_info, _user_out, _media_info, _cache_file_id
 
 logger = logging.getLogger("telegram-crm")
 
@@ -495,9 +496,24 @@ class TelegramService:
             if i < total:
                 await asyncio.sleep(BULK_SEND_DELAY_SECONDS)
 
+    @staticmethod
+    def _build_input_media(cached_file_id: str):
+        """Разбирает строку из telegram_utils._cache_file_id обратно в
+        InputPhoto/InputDocument, которые Telethon может отправить
+        напрямую -- без чтения файла с диска и повторной загрузки его
+        байтов на сервер Telegram (раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ /
+        "использовать telegram_file_id для повторной отправки без
+        повторной загрузки файла" ТЗ)."""
+        kind, id_, access_hash, file_ref_hex, dc_id = cached_file_id.split(":")
+        file_reference = bytes.fromhex(file_ref_hex)
+        if kind == "photo":
+            return InputPhoto(id=int(id_), access_hash=int(access_hash), file_reference=file_reference)
+        return InputDocument(id=int(id_), access_hash=int(access_hash), file_reference=file_reference)
+
     async def send_file(
         self, telegram_id: int, file_path: str, caption: Optional[str] = None,
         reply_to: Optional[int] = None, voice_note: bool = False, kind: Optional[str] = None,
+        cached_file_id: Optional[str] = None,
     ) -> dict:
         """Отправляет вложение корректным методом Telegram API в
         зависимости от типа (раздел ОТПРАВКА ФОТО И ВИДЕО ТЗ):
@@ -516,7 +532,17 @@ class TelegramService:
         галереи, что для вложений "на лету" (обычный чат, вставка из
         буфера, кампании). Единая точка входа для ВСЕХ мест приложения,
         отправляющих вложения — обычных чатов, быстрых сообщений,
-        кампаний и очереди отправки (раздел АРХИТЕКТУРА ТЗ)."""
+        кампаний и очереди отправки (раздел АРХИТЕКТУРА ТЗ).
+
+        `cached_file_id` — необязательный слепок Telethon
+        InputPhoto/InputDocument от предыдущей отправки этого же файла
+        (см. crud.get_latest_media_file_id / models.MediaUsage.
+        telegram_file_id), собранный telegram_utils._cache_file_id.
+        Если он передан, файл отправляется этим объектом напрямую, без
+        чтения file_path и повторной загрузки байтов на сервер
+        Telegram. file_reference в нём живёт около суток — если он уже
+        истёк, Telegram ответит FileReferenceExpiredError, и метод
+        сам подстрахуется обычной отправкой с диска."""
         client = await self._get_client()
         if not await _with_timeout(client.is_user_authorized(), "проверка авторизации"):
             raise TelegramAuthError("Аккаунт не авторизован")
@@ -544,11 +570,30 @@ class TelegramService:
         elif kind == "document":
             kwargs["force_document"] = True
 
+        file_arg = file_path
+        used_cache = False
+        if cached_file_id:
+            try:
+                file_arg = self._build_input_media(cached_file_id)
+                used_cache = True
+            except Exception:
+                logger.warning("send_file: не удалось разобрать cached_file_id %r, отправляю с диска", cached_file_id)
+                file_arg = file_path
+
         try:
-            msg = await _with_timeout(
-                client.send_file(telegram_id, file_path, **kwargs),
-                "отправка файла",
-            )
+            try:
+                msg = await _with_timeout(
+                    client.send_file(telegram_id, file_arg, **kwargs),
+                    "отправка файла",
+                )
+            except FileReferenceExpiredError:
+                if not used_cache:
+                    raise
+                logger.info("send_file: file_reference устарел, повторяю отправку с диска")
+                msg = await _with_timeout(
+                    client.send_file(telegram_id, file_path, **kwargs),
+                    "отправка файла (повторно, с диска)",
+                )
         except ValueError:
             raise TelegramAuthError("Не удалось найти этого пользователя в Telegram")
         return {
@@ -557,6 +602,7 @@ class TelegramService:
             "edited": False, "pinned": False,
             "reply_to": {"id": reply_to, "text": ""} if reply_to else None,
             "media": _media_info(msg) if msg.media else None,
+            "cache_file_id": _cache_file_id(msg) if msg.media else None,
         }
 
     async def edit_message(self, telegram_id: int, message_id: int, text: str) -> dict:

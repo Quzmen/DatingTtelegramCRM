@@ -759,8 +759,30 @@ def list_media_files(
     total_count = db.query(models.MediaFile).count()
     total_size = db.query(func.coalesce(func.sum(models.MediaFile.size_bytes), 0)).scalar() or 0
 
+    # Раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ ТЗ: "Использовано: 5 раз" /
+    # "Последняя отправка: 15.07.2026" в галерее. send_count уже лежит
+    # прямо на MediaFile (см. record_media_usage), а дату последней
+    # отправки по ВСЕМ диалогам сразу считаем одним групповым запросом
+    # на всю текущую выборку — вместо N+1 обращений в media_usages.
+    last_sent_map: dict[int, "datetime"] = {}
+    ids = [r.id for r in rows]
+    if ids:
+        last_sent_rows = (
+            db.query(models.MediaUsage.media_id, func.max(models.MediaUsage.sent_at))
+            .filter(models.MediaUsage.media_id.in_(ids))
+            .group_by(models.MediaUsage.media_id)
+            .all()
+        )
+        last_sent_map = dict(last_sent_rows)
+
+    items = []
+    for r in rows:
+        out = media_file_out(r)
+        out.last_sent_at = last_sent_map.get(r.id)
+        items.append(out)
+
     return schemas.MediaListOut(
-        items=[media_file_out(r) for r in rows],
+        items=items,
         total_count=total_count,
         total_size_bytes=int(total_size),
     )
@@ -789,13 +811,37 @@ def delete_media_file(db: Session, media: models.MediaFile) -> None:
     media_manager.delete_files(stored_name)
 
 
-def record_media_usage(db: Session, media_id: int, telegram_id: int, context: str = "chat") -> None:
-    usage = models.MediaUsage(media_id=media_id, telegram_id=telegram_id, context=context)
+def record_media_usage(
+    db: Session, media_id: int, telegram_id: int, context: str = "chat",
+    telegram_message_id: Optional[int] = None,
+    telegram_file_id: Optional[str] = None,
+    sent_kind: Optional[str] = None,
+) -> None:
+    usage = models.MediaUsage(
+        media_id=media_id, telegram_id=telegram_id, context=context,
+        telegram_message_id=telegram_message_id,
+        telegram_file_id=telegram_file_id,
+        sent_kind=sent_kind,
+    )
     db.add(usage)
     db.query(models.MediaFile).filter(models.MediaFile.id == media_id).update(
         {"send_count": models.MediaFile.send_count + 1}
     )
     db.commit()
+
+
+def get_latest_media_file_id(db: Session, media_id: int) -> Optional[str]:
+    """Последний известный telegram_file_id для этого файла медиатеки
+    (по любому диалогу, не только текущему) — используется
+    telegram_service.send_file, чтобы переслать тот же файл повторно
+    без выгрузки байтов заново (раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ ТЗ)."""
+    row = (
+        db.query(models.MediaUsage.telegram_file_id)
+        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.telegram_file_id.isnot(None))
+        .order_by(models.MediaUsage.sent_at.desc())
+        .first()
+    )
+    return row[0] if row else None
 
 
 def media_usage_status(db: Session, media_id: int, telegram_id: int) -> schemas.MediaUsageStatusOut:

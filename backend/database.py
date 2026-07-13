@@ -152,6 +152,23 @@ def run_migrations():
     # Папки медиатеки (media_folders создаётся автоматически через
     # create_all, как новая таблица) — а media_files.folder_id нужно
     # долить существующим базам, как и dialogs.folder_id выше.
+    # История использования медиатеки (media_usages создаётся
+    # автоматически через create_all, как новая таблица) — а три поля
+    # про реальные Telegram-данные отправки (message_id/file_id/kind,
+    # см. models.MediaUsage) нужно долить существующим базам, как и
+    # остальные колонки выше.
+    if "media_usages" in inspector.get_table_names():
+        usage_columns = {c["name"] for c in inspector.get_columns("media_usages")}
+        usage_new_columns = {
+            "telegram_message_id": "BIGINT",
+            "telegram_file_id": "VARCHAR(500)",
+            "sent_kind": "VARCHAR(20)",
+        }
+        with engine.begin() as conn:
+            for column_name, ddl_type in usage_new_columns.items():
+                if column_name not in usage_columns:
+                    conn.execute(sa.text(f"ALTER TABLE media_usages ADD COLUMN {column_name} {ddl_type}"))
+
     if "media_files" in inspector.get_table_names():
         media_columns = {c["name"] for c in inspector.get_columns("media_files")}
         if "folder_id" not in media_columns:

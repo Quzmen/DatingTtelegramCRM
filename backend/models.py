@@ -409,6 +409,19 @@ class MediaUsage(Base):
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     context = Column(String(20), nullable=False, default="chat")   # chat | campaign — откуда была отправка
 
+    # Раздел СОХРАНЕНИЕ TELEGRAM ДАННЫХ ТЗ: что именно ушло в Telegram
+    # для этой отправки. telegram_message_id — id сообщения в диалоге
+    # получателя. telegram_file_id — компактный слепок Telethon
+    # InputPhoto/InputDocument ("photo:<id>:<access_hash>:<file_reference
+    # в hex>:<dc_id>" / аналогично для document), по которому
+    # send_media_from_library повторно отправляет тот же файл без
+    # повторной загрузки байтов на сервер Telegram (см.
+    # telegram_service.send_file/_build_input_media). sent_kind — каким
+    # методом Telegram фактически ушло вложение (photo/video/gif/document).
+    telegram_message_id = Column(BigInteger, nullable=True)
+    telegram_file_id = Column(String(500), nullable=True)
+    sent_kind = Column(String(20), nullable=True)
+
     media = relationship("MediaFile", back_populates="usages")
 
 

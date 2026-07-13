@@ -107,3 +107,36 @@ def _media_info(m) -> Optional[dict]:
                 "size": m.file.size if m.file else None,
                 "mime": m.file.mime_type if m.file else "application/octet-stream", "duration": None}
     return None
+
+
+def _cache_file_id(m) -> Optional[str]:
+    """Раздел СОХРАНЕНИЕ TELEGRAM ДАННЫХ / telegram_file_id ТЗ.
+
+    Telethon работает поверх MTProto, а не Bot API — здесь нет
+    готового строкового file_id, но эквивалент можно собрать самому
+    из id/access_hash/file_reference уже отправленного вложения
+    (m.photo или m.document — видео/gif/голосовые в Telethon это тоже
+    Document с разными атрибутами, поэтому одного m.document
+    достаточно). Строка вида "photo:<id>:<access_hash>:<file_reference
+    в hex>:<dc_id>" — компактная и легко парсится обратно в
+    InputPhoto/InputDocument в telegram_service._build_input_media,
+    которым можно переслать тот же файл повторно без выгрузки байтов
+    заново (см. TelegramService.send_file, параметр cached_file_id).
+
+    file_reference у Telegram истекает примерно через сутки — на этот
+    случай send_file подстраховывается повторной отправкой с диска,
+    так что устаревший file_id здесь не критичен, только теряется
+    экономия трафика для этой конкретной отправки."""
+    if m.photo:
+        p = m.photo
+        try:
+            return f"photo:{p.id}:{p.access_hash}:{p.file_reference.hex()}:{p.dc_id}"
+        except Exception:
+            return None
+    if m.document:
+        d = m.document
+        try:
+            return f"document:{d.id}:{d.access_hash}:{d.file_reference.hex()}:{d.dc_id}"
+        except Exception:
+            return None
+    return None

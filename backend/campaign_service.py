@@ -70,10 +70,17 @@ async def run_campaign(campaign_id: int) -> None:
                 text = render_template(campaign.message_text, variables)
                 if campaign.media_id and campaign.media:
                     path = media_manager.file_path(campaign.media.stored_name)
-                    await telegram_service.send_file(
+                    cached_file_id = crud.get_latest_media_file_id(db, campaign.media_id)
+                    send_result = await telegram_service.send_file(
                         telegram_id, str(path), caption=text, kind=campaign.media.kind.value,
+                        cached_file_id=cached_file_id,
                     )
-                    crud.record_media_usage(db, campaign.media_id, telegram_id, context="campaign")
+                    crud.record_media_usage(
+                        db, campaign.media_id, telegram_id, context="campaign",
+                        telegram_message_id=send_result.get("id"),
+                        telegram_file_id=send_result.get("cache_file_id"),
+                        sent_kind=campaign.media.kind.value,
+                    )
                 elif campaign.image_path:
                     # Вложения, загруженные до появления медиатеки — отправляем
                     # как раньше, определяя фото/видео по расширению файла.

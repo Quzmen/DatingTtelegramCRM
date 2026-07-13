@@ -451,6 +451,9 @@ const MediaLibrary = (() => {
           <div class="medialib-tile__meta">
             <span class="medialib-tile__name" title="${Utils.escapeHtml(m.original_name)}">${Utils.escapeHtml(m.original_name)}</span>
             <span class="medialib-tile__size">${Utils.formatFileSize(m.size_bytes)}</span>
+            ${m.send_count > 0
+              ? `<span class="medialib-tile__usage" title="Последняя отправка: ${fmtDate(m.last_sent_at)}">Использовано: ${m.send_count} раз</span>`
+              : ""}
           </div>
         </div>`;
     }).join("");
@@ -550,8 +553,9 @@ const MediaLibrary = (() => {
       `Размер: ${Utils.formatFileSize(media.size_bytes)}\n` +
       (media.width && media.height ? `Разрешение: ${media.width}×${media.height}\n` : "") +
       `Папка: ${folder ? folder.name : "Без папки"}\n` +
-      `Загружен: ${fmtDate(media.created_at)}\n` +
-      `Отправлен всего раз: ${media.send_count}`
+      `Загружен: ${fmtDate(media.created_at)}\n\n` +
+      `Использовано: ${media.send_count} раз` +
+      (media.last_sent_at ? `\nПоследняя отправка: ${fmtDate(media.last_sent_at)}` : "")
     );
   }
 

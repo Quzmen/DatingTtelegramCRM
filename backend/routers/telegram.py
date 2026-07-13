@@ -210,13 +210,25 @@ async def send_media_from_library(
     path = media_manager.file_path(media.stored_name)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Файл отсутствует на диске")
+    # "Использовать telegram_file_id для повторной отправки без
+    # повторной загрузки файла" (раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ ТЗ) —
+    # берём последний известный слепок этого файла из любой прошлой
+    # отправки; send_file сам подстрахуется отправкой с диска, если
+    # он уже истёк.
+    cached_file_id = crud.get_latest_media_file_id(db, media_id)
     try:
         result = await telegram_service.send_file(
             telegram_id, str(path), caption=data.caption, reply_to=data.reply_to, kind=media.kind.value,
+            cached_file_id=cached_file_id,
         )
     except TelegramAuthError as e:
         _err(e)
-    crud.record_media_usage(db, media_id, telegram_id, context="chat")
+    crud.record_media_usage(
+        db, media_id, telegram_id, context="chat",
+        telegram_message_id=result.get("id"),
+        telegram_file_id=result.get("cache_file_id"),
+        sent_kind=media.kind.value,
+    )
     return result
 
 
