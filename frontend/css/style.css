@@ -80,12 +80,17 @@ ul{ list-style:none; margin:0; padding:0; }
 }
 .railnav__mark{
   width:34px; height:34px;
+  border:none;
   border-radius: 10px;
   background: linear-gradient(145deg, var(--primary), #6D7CE8);
   display:flex; align-items:center; justify-content:center;
   color:#fff;
   margin-bottom: 18px;
+  cursor:pointer;
+  transition: box-shadow .15s ease, filter .15s ease;
 }
+.railnav__mark:hover{ filter: brightness(1.1); }
+.railnav__mark.is-active{ box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
 .railnav__btn{
   position:relative;
   width:40px; height:40px;

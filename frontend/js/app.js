@@ -7,7 +7,7 @@ const App = (() => {
     views.forEach((v) => {
       document.getElementById(`view-${v}`).hidden = v !== name;
     });
-    document.querySelectorAll(".railnav__btn[data-view]").forEach((btn) => {
+    document.querySelectorAll("[data-view].railnav__btn, [data-view].railnav__mark").forEach((btn) => {
       btn.classList.toggle("is-active", btn.dataset.view === name);
     });
 
@@ -48,7 +48,7 @@ const App = (() => {
   }
 
   function wireNav() {
-    document.querySelectorAll(".railnav__btn[data-view]").forEach((btn) => {
+    document.querySelectorAll("[data-view].railnav__btn, [data-view].railnav__mark").forEach((btn) => {
       btn.addEventListener("click", () => switchView(btn.dataset.view));
     });
     document.getElementById("btnAttention").addEventListener("click", () => switchView("dashboard"));
