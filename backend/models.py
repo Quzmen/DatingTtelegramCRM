@@ -346,6 +346,24 @@ class MediaKind(str, enum.Enum):
     DOCUMENT = "document"
 
 
+class MediaFolder(Base):
+    """Папка внутри встроенной медиатеки (раздел СТРУКТУРА МЕДИАТЕКИ
+    ТЗ) — например 📷 Фото, 🔥 Избранное, 🗂 Архив. Отдельная сущность
+    от Folder (та — папки/сегменты диалогов в списке чатов): один
+    файл медиатеки лежит максимум в одной папке одновременно, как и
+    диалог в своей папке."""
+    __tablename__ = "media_folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(60), nullable=False)
+    color = Column(String(20), nullable=False, default="#6C8EF5")
+    icon = Column(String(16), nullable=True)
+    position = Column(Integer, nullable=False, default=0, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    files = relationship("MediaFile", back_populates="folder")
+
+
 class MediaFile(Base):
     """Единый склад медиафайлов CRM (модуль медиатеки) — одно место
     хранения фото/видео/GIF/документов, переиспользуемых в обычных
@@ -363,12 +381,14 @@ class MediaFile(Base):
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
     has_thumb = Column(Boolean, nullable=False, default=False)
+    folder_id = Column(Integer, ForeignKey("media_folders.id", ondelete="SET NULL"), nullable=True, index=True)
 
     send_count = Column(Integer, nullable=False, default=0)   # сколько раз файл был отправлен всего (по всем диалогам)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    folder = relationship("MediaFolder", back_populates="files")
     usages = relationship(
         "MediaUsage", back_populates="media", cascade="all, delete-orphan",
         order_by="desc(MediaUsage.sent_at)",

@@ -623,6 +623,92 @@ def mark_outbox_read(db: Session, dialog_telegram_id: int, max_id: int) -> None:
 # приложения.
 # ---------------------------------------------------------------
 
+# ---------------------------------------------------------------
+# Папки медиатеки (раздел СТРУКТУРА МЕДИАТЕКИ ТЗ)
+# ---------------------------------------------------------------
+
+def _media_folder_with_count(db: Session, folder: models.MediaFolder) -> schemas.MediaFolderOut:
+    count = db.query(models.MediaFile).filter(models.MediaFile.folder_id == folder.id).count()
+    out = schemas.MediaFolderOut.model_validate(folder)
+    out.file_count = count
+    return out
+
+
+def list_media_folders(db: Session) -> List[schemas.MediaFolderOut]:
+    folders = db.query(models.MediaFolder).order_by(models.MediaFolder.position, models.MediaFolder.id).all()
+    return [_media_folder_with_count(db, f) for f in folders]
+
+
+def create_media_folder(db: Session, data: schemas.MediaFolderCreate) -> schemas.MediaFolderOut:
+    max_position = db.query(models.MediaFolder).count()
+    folder = models.MediaFolder(
+        name=data.name.strip(),
+        color=data.color or "#6C8EF5",
+        icon=data.icon,
+        position=max_position,
+    )
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return _media_folder_with_count(db, folder)
+
+
+def get_media_folder(db: Session, folder_id: int) -> Optional[models.MediaFolder]:
+    return db.query(models.MediaFolder).filter(models.MediaFolder.id == folder_id).first()
+
+
+def update_media_folder(db: Session, folder: models.MediaFolder, data: schemas.MediaFolderUpdate) -> schemas.MediaFolderOut:
+    if data.name is not None:
+        folder.name = data.name.strip()
+    if data.color is not None:
+        folder.color = data.color
+    if data.icon is not None:
+        folder.icon = data.icon
+    db.commit()
+    db.refresh(folder)
+    return _media_folder_with_count(db, folder)
+
+
+def delete_media_folder(db: Session, folder: models.MediaFolder) -> None:
+    # Файлы, лежавшие в папке, не удаляются -- просто теряют привязку
+    # (folder_id -> NULL), как и диалоги при удалении папки диалогов.
+    db.query(models.MediaFile).filter(models.MediaFile.folder_id == folder.id).update({"folder_id": None})
+    db.delete(folder)
+    db.commit()
+
+
+def reorder_media_folders(db: Session, ordered_ids: List[int]) -> List[schemas.MediaFolderOut]:
+    folders = {f.id: f for f in db.query(models.MediaFolder).all()}
+    for position, folder_id in enumerate(ordered_ids):
+        folder = folders.get(folder_id)
+        if folder is not None:
+            folder.position = position
+    db.commit()
+    return list_media_folders(db)
+
+
+def move_media_files(db: Session, media_ids: List[int], folder_id: Optional[int]) -> int:
+    """Массовый перенос файлов в папку (или изъятие, если folder_id
+    is None) — используется и множественным выбором в галерее, и
+    drag & drop одного файла на папку в боковой панели."""
+    moved = (
+        db.query(models.MediaFile)
+        .filter(models.MediaFile.id.in_(media_ids))
+        .update({"folder_id": folder_id}, synchronize_session=False)
+    )
+    db.commit()
+    return moved
+
+
+def bulk_delete_media_files(db: Session, media_ids: List[int]) -> int:
+    rows = db.query(models.MediaFile).filter(models.MediaFile.id.in_(media_ids)).all()
+    count = 0
+    for media in rows:
+        delete_media_file(db, media)
+        count += 1
+    return count
+
+
 def media_file_out(m: models.MediaFile) -> schemas.MediaFileOut:
     out = schemas.MediaFileOut.model_validate(m)
     out.url = f"/api/media/{m.id}/file"
@@ -646,17 +732,23 @@ _MEDIA_SORTS = {
     "name_desc": models.MediaFile.original_name.desc(),
     "size_desc": models.MediaFile.size_bytes.desc(),
     "size_asc": models.MediaFile.size_bytes.asc(),
+    "popular_desc": models.MediaFile.send_count.desc(),   # раздел ОРГАНИЗАЦИЯ ФАЙЛОВ ТЗ: "сортировка по популярности использования"
 }
 
 
 def list_media_files(
     db: Session, search: Optional[str] = None, kind: Optional[str] = None, sort: str = "date_desc",
+    folder_id: Optional[int] = None, unfiled: bool = False,
 ) -> schemas.MediaListOut:
     query = db.query(models.MediaFile)
     if search:
         query = query.filter(models.MediaFile.original_name.ilike(f"%{search}%"))
     if kind:
         query = query.filter(models.MediaFile.kind == kind)
+    if unfiled:
+        query = query.filter(models.MediaFile.folder_id.is_(None))
+    elif folder_id is not None:
+        query = query.filter(models.MediaFile.folder_id == folder_id)
     query = query.order_by(_MEDIA_SORTS.get(sort, _MEDIA_SORTS["date_desc"]))
     rows = query.all()
 

@@ -37,9 +37,64 @@ def list_media(
     search: Optional[str] = None,
     kind: Optional[str] = None,
     sort: str = "date_desc",
+    folder_id: Optional[int] = None,
+    unfiled: bool = False,
     db: Session = Depends(get_db),
 ):
-    return crud.list_media_files(db, search=search, kind=kind, sort=sort)
+    return crud.list_media_files(db, search=search, kind=kind, sort=sort, folder_id=folder_id, unfiled=unfiled)
+
+
+# ---------------------------------------------------------------
+# Папки медиатеки (раздел СТРУКТУРА МЕДИАТЕКИ ТЗ)
+# ---------------------------------------------------------------
+
+@router.get("/folders", response_model=List[schemas.MediaFolderOut])
+def list_media_folders(db: Session = Depends(get_db)):
+    return crud.list_media_folders(db)
+
+
+@router.post("/folders", response_model=schemas.MediaFolderOut)
+def create_media_folder(data: schemas.MediaFolderCreate, db: Session = Depends(get_db)):
+    return crud.create_media_folder(db, data)
+
+
+@router.patch("/folders/{folder_id}", response_model=schemas.MediaFolderOut)
+def update_media_folder(folder_id: int, data: schemas.MediaFolderUpdate, db: Session = Depends(get_db)):
+    folder = crud.get_media_folder(db, folder_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    return crud.update_media_folder(db, folder, data)
+
+
+@router.delete("/folders/{folder_id}", status_code=204)
+def delete_media_folder(folder_id: int, db: Session = Depends(get_db)):
+    folder = crud.get_media_folder(db, folder_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    crud.delete_media_folder(db, folder)
+
+
+@router.post("/folders/reorder", response_model=List[schemas.MediaFolderOut])
+def reorder_media_folders(data: schemas.MediaFolderReorderIn, db: Session = Depends(get_db)):
+    return crud.reorder_media_folders(db, data.ordered_ids)
+
+
+# ---------------------------------------------------------------
+# Массовые действия — выбор нескольких файлов / drag & drop (раздел ИНТЕРФЕЙС ТЗ)
+# ---------------------------------------------------------------
+
+@router.post("/move")
+def move_media(data: schemas.MediaMoveIn, db: Session = Depends(get_db)):
+    if data.folder_id is not None and crud.get_media_folder(db, data.folder_id) is None:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    moved = crud.move_media_files(db, data.media_ids, data.folder_id)
+    return {"moved": moved}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_media(data: schemas.MediaBulkDeleteIn, db: Session = Depends(get_db)):
+    deleted = crud.bulk_delete_media_files(db, data.media_ids)
+    return {"deleted": deleted}
 
 
 # ---------------------------------------------------------------

@@ -399,6 +399,7 @@ class MediaFileOut(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     has_thumb: bool = False
+    folder_id: Optional[int] = None
     send_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -416,6 +417,50 @@ class MediaListOut(BaseModel):
 
 class MediaRenameIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=300)
+
+
+# ---------- Папки медиатеки (раздел СТРУКТУРА МЕДИАТЕКИ ТЗ) ----------
+# Отдельная от FolderBase/FolderOut иерархия — те описывают папки
+# диалогов, эти — папки внутри встроенной галереи медиафайлов.
+
+class MediaFolderBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    color: str = Field(default="#6C8EF5", max_length=20)
+    icon: Optional[str] = Field(default=None, max_length=16)
+
+
+class MediaFolderCreate(MediaFolderBase):
+    pass
+
+
+class MediaFolderUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=60)
+    color: Optional[str] = Field(None, max_length=20)
+    icon: Optional[str] = Field(None, max_length=16)
+
+
+class MediaFolderOut(MediaFolderBase):
+    id: int
+    position: int
+    file_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MediaFolderReorderIn(BaseModel):
+    ordered_ids: List[int] = Field(..., min_length=1)
+
+
+class MediaMoveIn(BaseModel):
+    """Массовый перенос файлов медиатеки в папку (или изъятие из
+    папки, если folder_id не задан) — раздел ИНТЕРФЕЙС ТЗ: drag & drop
+    и массовый выбор."""
+    media_ids: List[int] = Field(..., min_length=1)
+    folder_id: Optional[int] = None
+
+
+class MediaBulkDeleteIn(BaseModel):
+    media_ids: List[int] = Field(..., min_length=1)
 
 
 class MediaUsageStatusOut(BaseModel):

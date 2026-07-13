@@ -180,6 +180,18 @@ const API = (() => {
       request(`/media/${mediaId}/usage/check`, { method: "POST", body: JSON.stringify({ telegram_ids: telegramIds }) }),
     dialogMediaUsage: (telegramId, mediaIds) =>
       request(`/media/usage-for-dialog`, { method: "POST", body: JSON.stringify({ telegram_id: telegramId, media_ids: mediaIds }) }),
+
+    // media library folders (папки внутри медиатеки — отдельно от папок диалогов выше)
+    listMediaFolders: () => request(`/media/folders`),
+    createMediaFolder: (data) => request(`/media/folders`, { method: "POST", body: JSON.stringify(data) }),
+    updateMediaFolder: (id, data) => request(`/media/folders/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteMediaFolder: (id) => request(`/media/folders/${id}`, { method: "DELETE" }),
+    reorderMediaFolders: (orderedIds) =>
+      request(`/media/folders/reorder`, { method: "POST", body: JSON.stringify({ ordered_ids: orderedIds }) }),
+    moveMedia: (mediaIds, folderId) =>
+      request(`/media/move`, { method: "POST", body: JSON.stringify({ media_ids: mediaIds, folder_id: folderId }) }),
+    bulkDeleteMedia: (mediaIds) =>
+      request(`/media/bulk-delete`, { method: "POST", body: JSON.stringify({ media_ids: mediaIds }) }),
     tgSendMediaFile: (telegramId, mediaId, { caption = null, replyTo = null } = {}) =>
       request(`/telegram/messages/${telegramId}/media/${mediaId}`, {
         method: "POST", body: JSON.stringify({ caption, reply_to: replyTo }),
