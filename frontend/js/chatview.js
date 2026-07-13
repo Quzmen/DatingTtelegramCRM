@@ -514,7 +514,7 @@ const ChatView = (() => {
     const name = (file && file.name || "").toLowerCase();
     const mime = (file && file.type || "").toLowerCase();
     if (name.endsWith(".gif") || mime === "image/gif") return "gif";
-    if (mime.startsWith("image/") || /\.(jpe?g|png|webp|bmp|heic)$/.test(name)) return "photo";
+    if (mime.startsWith("image/") || /\.(jpe?g|jfif|png|webp|bmp|heic)$/.test(name)) return "photo";
     if (mime.startsWith("video/") || /\.(mp4|mov|mkv|webm|avi|m4v|3gp)$/.test(name)) return "video";
     return "document";
   }

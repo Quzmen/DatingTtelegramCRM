@@ -36,7 +36,7 @@ logger = logging.getLogger("telegram-crm")
 # Классификация типа файла
 # ---------------------------------------------------------------
 
-PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic"}
+PHOTO_EXTS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".heic"}
 GIF_EXTS = {".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".3gp"}
 
