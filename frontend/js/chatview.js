@@ -111,6 +111,12 @@ const ChatView = (() => {
 
   let replyTo = null;           // {id, text}
   let editing = null;           // {id, originalText}
+  // Вложение, выбранное, но ещё не отправленное — предпросмотр перед
+  // отправкой (раздел ПРИКРЕПЛЕНИЕ МЕДИА ТЗ): "Выбрал фото → увидел
+  // превью → написал текст → отправил". Пока это поле не пустое, кнопка
+  // отправки видна независимо от текста, а сам файл/медиатечный объект
+  // уходит вместе с текстом как caption только по сабмиту формы.
+  let pendingAttachment = null; // {source: 'upload'|'library', file, media, previewUrl, name, size, kind}
   let forwardMessageId = null;
 
   let dialogsTimer = null;
@@ -498,6 +504,83 @@ const ChatView = (() => {
     if (closeBtn) closeBtn.addEventListener("click", cancelReplyOrEdit);
   }
 
+  // ---- attachment preview (выбрал файл → увидел превью → отправил) ----
+  const ATTACH_KIND_ICON = { photo: "🖼", video: "🎬", gif: "GIF", document: "📄" };
+
+  // Та же классификация, что и media_manager.classify_kind на бэкенде —
+  // только по имени/типу File, чтобы показать правильную иконку/подпись
+  // ещё до отправки на сервер.
+  function classifyFileKind(file) {
+    const name = (file && file.name || "").toLowerCase();
+    const mime = (file && file.type || "").toLowerCase();
+    if (name.endsWith(".gif") || mime === "image/gif") return "gif";
+    if (mime.startsWith("image/") || /\.(jpe?g|png|webp|bmp|heic)$/.test(name)) return "photo";
+    if (mime.startsWith("video/") || /\.(mp4|mov|mkv|webm|avi|m4v|3gp)$/.test(name)) return "video";
+    return "document";
+  }
+
+  function setPendingAttachment(next) {
+    clearPendingAttachment({ silent: true });
+    pendingAttachment = next;
+    renderAttachmentPreview();
+    updateSendIcon();
+    $("composerText").focus();
+  }
+
+  function clearPendingAttachment(opts = {}) {
+    if (pendingAttachment && pendingAttachment.objectUrl) {
+      URL.revokeObjectURL(pendingAttachment.objectUrl);
+    }
+    pendingAttachment = null;
+    if (!opts.silent) { renderAttachmentPreview(); updateSendIcon(); }
+  }
+
+  function stageLocalFile(file) {
+    const kind = classifyFileKind(file);
+    const objectUrl = (kind === "photo" || kind === "gif" || kind === "video") ? URL.createObjectURL(file) : null;
+    setPendingAttachment({
+      source: "upload",
+      file,
+      name: file.name || "файл",
+      size: file.size,
+      kind,
+      previewUrl: (kind === "photo" || kind === "gif" || kind === "video") ? objectUrl : null,
+      objectUrl,
+    });
+  }
+
+  function replacePendingAttachment() {
+    if (!pendingAttachment) return;
+    if (pendingAttachment.source === "library") {
+      openGallery();
+    } else {
+      $("fileAttachInput").click();
+    }
+  }
+
+  function renderAttachmentPreview() {
+    const box = $("composerAttachPreview");
+    if (!box) return;
+    if (!pendingAttachment) { box.hidden = true; box.innerHTML = ""; return; }
+    const a = pendingAttachment;
+    const thumbHtml = a.previewUrl
+      ? (a.kind === "video"
+          ? `<video src="${a.previewUrl}" muted preload="metadata"></video>`
+          : `<img src="${a.previewUrl}" alt="">`)
+      : `<div class="composer-attach-preview__icon">${ATTACH_KIND_ICON[a.kind] || "📄"}</div>`;
+    box.hidden = false;
+    box.innerHTML = `
+      <div class="composer-attach-preview__thumb">${thumbHtml}</div>
+      <div class="composer-attach-preview__meta">
+        <span class="composer-attach-preview__name" title="${Utils.escapeHtml(a.name)}">${Utils.escapeHtml(a.name)}</span>
+        <span class="composer-attach-preview__size">${a.size != null ? Utils.formatFileSize(a.size) : ""}</span>
+      </div>
+      <button type="button" class="composer-attach-preview__replace" id="btnReplaceAttachment" title="Заменить файл">Заменить</button>
+      <button type="button" class="composer-attach-preview__remove" id="btnRemoveAttachment" title="Удалить вложение">&times;</button>`;
+    $("btnReplaceAttachment").addEventListener("click", replacePendingAttachment);
+    $("btnRemoveAttachment").addEventListener("click", () => clearPendingAttachment());
+  }
+
   // ---- forward modal ----------------------------------------------
   function openForwardModal(messageId) {
     forwardMessageId = messageId;
@@ -832,6 +915,7 @@ const ChatView = (() => {
     activeDialog = findDialog(id);
     if (activeDialog) activeDialog.unread_count = 0;
     cancelReplyOrEdit();
+    clearPendingAttachment();
     $("infopanel").classList.remove("is-collapsed");
     // Новый диалог всегда открывается внизу, независимо от того, где
     // пользователь был прокручен в предыдущем диалоге.
@@ -852,9 +936,10 @@ const ChatView = (() => {
   async function sendMessage() {
     const textarea = $("composerText");
     const text = textarea.value.trim();
-    if (!activeId || !text) return;
+    if (!activeId) return;
 
     if (editing) {
+      if (!text) return;
       const id = editing.id;
       textarea.value = "";
       autosize(textarea); updateSendIcon();
@@ -866,6 +951,32 @@ const ChatView = (() => {
       return;
     }
 
+    // Есть выбранное, но ещё не отправленное вложение — отправляем его
+    // вместе с набранным текстом как подпись (caption), как в обычных
+    // мессенджерах. Текст без вложения по-прежнему уходит как обычное
+    // сообщение (ветка ниже).
+    if (pendingAttachment) {
+      const attachment = pendingAttachment;
+      const caption = text;
+      const replyId = replyTo ? replyTo.id : null;
+      textarea.value = "";
+      autosize(textarea);
+      clearPendingAttachment({ silent: true });
+      replyTo = null; renderComposerBars();
+      updateSendIcon();
+      try {
+        const opts = { caption, replyTo: replyId };
+        if (attachment.source === "library") {
+          await API.tgSendMediaFile(activeId, attachment.media.id, opts);
+        } else {
+          await API.tgSendFile(activeId, attachment.file, opts);
+        }
+        await loadMessages({ silent: true });
+      } catch (err) { Utils.toast(err.message || "Не удалось отправить файл"); }
+      return;
+    }
+
+    if (!text) return;
     const replyId = replyTo ? replyTo.id : null;
     textarea.value = "";
     autosize(textarea); updateSendIcon();
@@ -886,24 +997,23 @@ const ChatView = (() => {
     }
   }
 
-  async function sendMediaFromLibrary(media, opts = {}) {
-    if (!activeId) return;
-    try {
-      await API.tgSendMediaFile(activeId, media.id, opts);
-      await loadMessages({ silent: true });
-    } catch (err) {
-      Utils.toast(err.message || "Не удалось отправить файл");
-    }
-  }
-
   function openGallery() {
     if (!activeId) return;
     MediaLibrary.open({
       dialogId: activeId,
       title: "Медиатека",
       onSelect: (media) => {
-        sendMediaFromLibrary(media, { replyTo: replyTo ? replyTo.id : null });
-        replyTo = null; renderComposerBars();
+        // Не отправляем сразу — показываем превью в поле ввода, как и
+        // для файлов с диска (раздел ПРИКРЕПЛЕНИЕ МЕДИА ТЗ). Реально
+        // уходит по нажатию "Отправить" в sendMessage().
+        setPendingAttachment({
+          source: "library",
+          media,
+          name: media.original_name,
+          size: media.size_bytes,
+          kind: media.kind,
+          previewUrl: media.thumb_url || (media.kind === "photo" || media.kind === "gif" ? media.url : null),
+        });
       },
     });
   }
@@ -915,12 +1025,13 @@ const ChatView = (() => {
 
   function updateSendIcon() {
     const hasText = $("composerText").value.trim().length > 0;
+    const hasContent = hasText || !!pendingAttachment;
     const sendBtn = $("composerSend");
     const voiceBtn = $("composerVoice");
-    sendBtn.hidden = !hasText;
-    sendBtn.style.display = hasText ? "flex" : "none";
-    voiceBtn.hidden = hasText;
-    voiceBtn.style.display = hasText ? "none" : "flex";
+    sendBtn.hidden = !hasContent;
+    sendBtn.style.display = hasContent ? "flex" : "none";
+    voiceBtn.hidden = hasContent;
+    voiceBtn.style.display = hasContent ? "none" : "flex";
   }
 
   // ---- emoji picker ----------------------------------------------
@@ -1074,8 +1185,7 @@ const ChatView = (() => {
       if (!file) return;
       const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
       const named = new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type });
-      sendFile(named, { replyTo: replyTo ? replyTo.id : null });
-      replyTo = null; renderComposerBars();
+      stageLocalFile(named);
     });
     textarea.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -1096,8 +1206,7 @@ const ChatView = (() => {
     $("fileAttachInput").addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
-      sendFile(file, { replyTo: replyTo ? replyTo.id : null });
-      replyTo = null; renderComposerBars();
+      stageLocalFile(file);
       e.target.value = "";
     });
 

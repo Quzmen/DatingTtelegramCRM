@@ -478,6 +478,46 @@
 .composer-bar__label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color: var(--ink-soft); }
 .composer-bar__close{ border:none; background:none; font-size:18px; line-height:1; color: var(--ink-faint); cursor:pointer; }
 
+/* ---- composer attachment preview (файл выбран, но ещё не отправлен) ---- */
+.composer-attach-preview[hidden]{ display:none; }
+.composer-attach-preview{
+  display:flex; align-items:center; gap:12px;
+  padding: 10px 16px; margin: 0 16px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+}
+.composer-attach-preview__thumb{
+  flex:none; width:52px; height:52px; border-radius:10px; overflow:hidden;
+  background: var(--slate-tint);
+  display:flex; align-items:center; justify-content:center;
+}
+.composer-attach-preview__thumb img, .composer-attach-preview__thumb video{
+  width:100%; height:100%; object-fit:cover;
+}
+.composer-attach-preview__icon{ font-size:20px; color: var(--ink-faint); }
+.composer-attach-preview__meta{
+  flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;
+}
+.composer-attach-preview__name{
+  font-size:13px; font-weight:600; color: var(--ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.composer-attach-preview__size{ font-size:11.5px; color: var(--ink-faint); }
+.composer-attach-preview__replace{
+  flex:none; border:none; background: var(--slate-tint); color: var(--ink-soft);
+  font-size:12px; font-weight:600; padding:6px 12px; border-radius:8px; cursor:pointer;
+  transition: background .15s ease;
+}
+.composer-attach-preview__replace:hover{ background: var(--border-strong); }
+.composer-attach-preview__remove{
+  flex:none; width:26px; height:26px; border-radius:50%; border:none;
+  background:transparent; color: var(--ink-faint); font-size:18px; line-height:1;
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.composer-attach-preview__remove:hover{ background: var(--rose-tint); color: var(--rose); }
+
 /* ---- emoji popover ---- */
 .emoji-popover{
   position:absolute; bottom:64px; left:16px;
