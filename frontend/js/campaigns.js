@@ -27,6 +27,30 @@ const Campaigns = (() => {
     completed_with_errors: "Завершена с ошибками",
   };
 
+  // Быстрые шаблоны — предзаполняют модалку создания, чтобы пустой экран
+  // не был тупиком, а сразу показывал типовые сценарии рассылок.
+  const CAMPAIGN_TEMPLATES = [
+    { id: "welcome",   title: "Приветствие новых контактов", desc: "Первое сообщение после знакомства",
+      name: "Приветствие новых контактов", text: "Привет, {name}! Рад знакомству 🙂" },
+    { id: "followup",  title: "Повторное касание", desc: "Напомнить о себе тем, кто давно не отвечал",
+      name: "Повторное касание", text: "Привет, {name}! Давно не общались — как дела?" },
+    { id: "broadcast", title: "Массовая рассылка", desc: "Одно сообщение всей выбранной аудитории",
+      name: "Массовая рассылка", text: "Здравствуйте, {name}! У нас важная новость." },
+    { id: "reminder",  title: "Напоминание клиентам", desc: "Мягкий пинг по назначенной встрече/договорённости",
+      name: "Напоминание клиентам", text: "{name}, напоминаю о нашей договорённости — удобно сегодня продолжить?" },
+  ];
+
+  // Вкладки фильтра списка кампаний (не путать с фильтрами получателей внутри кампании)
+  const LIST_FILTERS = [
+    { id: "all",       label: "Все",          match: () => true },
+    { id: "active",    label: "Активные",     match: (c) => c.status === "running" },
+    { id: "planned",   label: "Запланированные", match: (c) => c.status === "draft" || c.status === "ready" },
+    { id: "paused",    label: "Остановленные",   match: (c) => c.status === "paused" },
+    { id: "completed", label: "Завершённые",     match: (c) => c.status === "completed" },
+    { id: "errors",    label: "С ошибками",      match: (c) => c.status === "completed_with_errors" },
+  ];
+  let activeListFilter = "all";
+
   function $(id) { return document.getElementById(id); }
 
   async function render() {
@@ -44,11 +68,64 @@ const Campaigns = (() => {
   function renderList() {
     const list = $("campaignList");
     if (!list) return;
+
     if (!campaigns.length) {
-      list.innerHTML = `<div class="empty-col">Кампаний пока нет — создайте первую</div>`;
+      list.innerHTML = `
+        <div class="campaign-empty">
+          <div class="campaign-empty__art" aria-hidden="true">
+            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 11v2a2 2 0 0 0 2 2h1l3.5 4.5V6.5L6 11H5a2 2 0 0 0-2 2Z"/>
+              <path d="M14 8.5a5 5 0 0 1 0 7"/><path d="M17.3 5.5a9 9 0 0 1 0 13"/>
+            </svg>
+          </div>
+          <h3>Кампаний пока нет</h3>
+          <p>Кампания — это массовая рассылка сообщений выбранной аудитории контактов, с фильтрами получателей и журналом отправки. Начните с шаблона или создайте кампанию с нуля.</p>
+          <button class="btn btn--primary" id="campaignEmptyCreateBtn">+ Создать первую кампанию</button>
+          <div class="campaign-templates">
+            ${CAMPAIGN_TEMPLATES.map((t) => `
+              <button type="button" class="campaign-template-card" data-template="${t.id}">
+                <span class="campaign-template-card__title">${Utils.escapeHtml(t.title)}</span>
+                <span class="campaign-template-card__desc">${Utils.escapeHtml(t.desc)}</span>
+              </button>`).join("")}
+          </div>
+        </div>`;
+      const createBtn = $("campaignEmptyCreateBtn");
+      if (createBtn) createBtn.addEventListener("click", () => openEditModal(null));
+      list.querySelectorAll(".campaign-template-card").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tpl = CAMPAIGN_TEMPLATES.find((t) => t.id === btn.dataset.template);
+          openEditModal(null, tpl);
+        });
+      });
       return;
     }
-    list.innerHTML = campaigns.map((c) => {
+
+    const filtered = campaigns.filter(LIST_FILTERS.find((f) => f.id === activeListFilter).match);
+
+    list.innerHTML = `
+      <div class="campaign-filter-tabs" id="campaignFilterTabs">
+        ${LIST_FILTERS.map((f) => {
+          const count = campaigns.filter(f.match).length;
+          return `<button type="button" class="campaign-filter-tab ${f.id === activeListFilter ? "is-active" : ""}" data-filter="${f.id}">${f.label} <span>${count}</span></button>`;
+        }).join("")}
+      </div>
+      <div class="campaign-list__grid">
+        ${filtered.length ? filtered.map(campaignCardHTML).join("") : `<div class="empty-col">Нет кампаний с этим статусом</div>`}
+      </div>`;
+
+    $("campaignFilterTabs").querySelectorAll(".campaign-filter-tab").forEach((btn) => {
+      btn.addEventListener("click", () => { activeListFilter = btn.dataset.filter; renderList(); });
+    });
+
+    list.querySelectorAll(".campaign-card").forEach((card) => {
+      const id = Number(card.dataset.campaignId);
+      card.querySelectorAll("[data-action]").forEach((btn) => {
+        btn.addEventListener("click", () => handleAction(btn.dataset.action, id));
+      });
+    });
+  }
+
+  function campaignCardHTML(c) {
       const pct = c.total_selected ? Math.round((c.processed_count / c.total_selected) * 100) : 0;
       return `
       <div class="panel campaign-card" data-campaign-id="${c.id}">
@@ -80,14 +157,6 @@ const Campaigns = (() => {
           <button class="btn" data-action="logs">Журнал</button>
         </div>
       </div>`;
-    }).join("");
-
-    list.querySelectorAll(".campaign-card").forEach((card) => {
-      const id = Number(card.dataset.campaignId);
-      card.querySelectorAll("[data-action]").forEach((btn) => {
-        btn.addEventListener("click", () => handleAction(btn.dataset.action, id));
-      });
-    });
   }
 
   async function handleAction(action, id) {
@@ -223,13 +292,13 @@ const Campaigns = (() => {
     }
   }
 
-  async function openEditModal(campaign) {
+  async function openEditModal(campaign, template) {
     ensureEditModal();
     await ensureFilterOptions();
     const modal = $("campaignEditModal");
     $("campaignEditTitle").textContent = campaign ? "Изменить кампанию" : "Новая кампания";
-    $("campNameInput").value = campaign ? campaign.name : "";
-    $("campTextInput").value = campaign ? campaign.message_text : "";
+    $("campNameInput").value = campaign ? campaign.name : (template ? template.name : "");
+    $("campTextInput").value = campaign ? campaign.message_text : (template ? template.text : "");
 
     const picker = $("campFolderPicker");
     const selectedFolders = new Set(campaign ? campaign.folder_ids : []);

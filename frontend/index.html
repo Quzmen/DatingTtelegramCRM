@@ -27,11 +27,8 @@
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5h16a1 1 0 0 1 1 1V16a1 1 0 0 1-1 1H9l-4.5 4V17H4a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1Z"/></svg>
       <span class="railnav__badge" id="chatUnreadBadge" hidden>0</span>
     </button>
-    <button class="railnav__btn" data-view="contacts" title="Контакты">
+    <button class="railnav__btn" data-view="contacts" title="CRM (Контакты и Канбан)">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c1.4-3.8 4.4-6 7.5-6s6.1 2.2 7.5 6"/></svg>
-    </button>
-    <button class="railnav__btn" data-view="kanban" title="Канбан">
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="5.5" height="16" rx="1.2"/><rect x="9.7" y="4" width="5.5" height="10" rx="1.2"/><rect x="16.4" y="4" width="5.5" height="13" rx="1.2"/></svg>
     </button>
     <button class="railnav__btn" data-view="telegram" title="Telegram">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M21.5 3 2.5 10.6c-1.2.5-1.2 1.2-.2 1.5l4.9 1.5 1.9 5.8c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.4-2.3 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.6-1.2Z" fill="currentColor"/></svg>
@@ -194,62 +191,71 @@
 
   </main>
 
-  <!-- ===== Contacts view (list + detail + history) ===== -->
+  <!-- ===== CRM view: contacts table + kanban, single source of truth ===== -->
   <main class="view" id="view-contacts" hidden>
-    <aside class="colist">
-      <div class="colist__toolbar">
-        <div class="search">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input type="text" id="searchInput" placeholder="Имя или username…">
-        </div>
-        <button class="btn btn--primary btn--icon" id="btnNewContact" title="Новый контакт">+</button>
-      </div>
-
-      <div class="colist__filters">
-        <select id="filterStatus">
-          <option value="">Все статусы</option>
-        </select>
-        <select id="filterTag">
-          <option value="">Все теги</option>
-        </select>
-        <select id="filterInterest">
-          <option value="">Любой интерес</option>
-          <option value="8-10">Высокий 8–10</option>
-          <option value="4-7">Средний 4–7</option>
-          <option value="1-3">Низкий 1–3</option>
-        </select>
-      </div>
-
-      <div class="colist__items" id="contactItems"></div>
-    </aside>
-
-    <section class="codetail" id="codetail">
-      <div class="codetail__empty" id="codetailEmpty">
-        <p>Выберите контакт слева<br>или создайте новый</p>
-      </div>
-      <div class="codetail__body" id="codetailBody" hidden></div>
-    </section>
-  </main>
-
-  <!-- ===== Kanban view ===== -->
-  <main class="view" id="view-kanban" hidden>
-    <header class="view__head">
+    <div class="crm-toolbar-row">
       <div>
-        <h1>Канбан-доска</h1>
-        <p class="view__sub">Перетаскивайте карточки между этапами</p>
+        <h1 class="crm-toolbar-row__title">CRM</h1>
+        <p class="view__sub">Все контакты — таблицей или воронкой продаж</p>
       </div>
-    </header>
-    <div class="kanban" id="kanbanBoard"></div>
+      <div class="seg-toggle" id="contactsModeToggle" role="tablist">
+        <button type="button" class="seg-toggle__btn is-active" data-mode="table" role="tab" aria-selected="true">Таблица</button>
+        <button type="button" class="seg-toggle__btn" data-mode="kanban" role="tab" aria-selected="false">Канбан</button>
+      </div>
+    </div>
+
+    <div class="contacts-body" id="contactsBodyTable">
+      <aside class="colist">
+        <div class="colist__toolbar">
+          <div class="search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="text" id="searchInput" placeholder="Имя или username…">
+          </div>
+          <button class="btn btn--primary btn--icon" id="btnNewContact" title="Новый контакт">+</button>
+        </div>
+
+        <div class="colist__filters">
+          <select id="filterStatus">
+            <option value="">Все статусы</option>
+          </select>
+          <select id="filterTag">
+            <option value="">Все теги</option>
+          </select>
+          <select id="filterInterest">
+            <option value="">Любой интерес</option>
+            <option value="8-10">Высокий 8–10</option>
+            <option value="4-7">Средний 4–7</option>
+            <option value="1-3">Низкий 1–3</option>
+          </select>
+        </div>
+
+        <div class="colist__items" id="contactItems"></div>
+      </aside>
+
+      <section class="codetail" id="codetail">
+        <div class="codetail__empty" id="codetailEmpty">
+          <p>Выберите контакт слева<br>или создайте новый</p>
+        </div>
+        <div class="codetail__body" id="codetailBody" hidden></div>
+      </section>
+    </div>
+
+    <div class="contacts-body contacts-body--kanban" id="contactsBodyKanban" hidden>
+      <div class="kanban" id="kanbanBoard"></div>
+    </div>
   </main>
 
-  <!-- ===== Telegram view ===== -->
+  <!-- ===== Telegram view: integration dashboard ===== -->
   <main class="view" id="view-telegram" hidden>
     <header class="view__head">
       <div>
         <h1>Telegram</h1>
-        <p class="view__sub">Вход в аккаунт и импорт контактов</p>
+        <p class="view__sub">Статус подключения, импорт контактов и быстрые действия</p>
       </div>
     </header>
+
+    <section class="stat-grid" id="tgStatGrid" hidden></section>
+    <section class="tg-quick-actions" id="tgQuickActions" hidden></section>
 
     <div class="tg-layout">
       <section class="panel tg-auth" id="tgAuthPanel"></section>

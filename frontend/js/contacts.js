@@ -1142,6 +1142,7 @@ const Contacts = (() => {
   async function goToContact(id) {
     await reload();
     App.switchView("contacts");
+    App.setContactsMode("table");
     selectContact(id);
   }
 

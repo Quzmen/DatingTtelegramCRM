@@ -172,7 +172,70 @@ const Telegram = (() => {
       renderContactList();
     } catch (err) {
       listEl().innerHTML = `<div class="empty-col">${Utils.escapeHtml(err.message || "Не удалось загрузить контакты")}</div>`;
+    } finally {
+      renderStatsAndActions();
     }
+  }
+
+  // ---------- status strip + quick actions ----------
+
+  function renderStatsAndActions() {
+    const statGrid = document.getElementById("tgStatGrid");
+    const actions = document.getElementById("tgQuickActions");
+    if (!statGrid || !actions) return;
+
+    if (step !== "done") {
+      statGrid.hidden = true;
+      actions.hidden = true;
+      return;
+    }
+
+    const importedCount = tgContacts.filter((c) => c.already_imported).length;
+    const notImportedCount = tgContacts.length - importedCount;
+    const crmTotal = (typeof Contacts !== "undefined" && Contacts.items) ? Contacts.items.length : importedCount;
+
+    statGrid.hidden = false;
+    statGrid.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-card__label">Статус подключения</div>
+        <div class="stat-card__value accent-teal" style="font-size:18px">Подключён</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card__label">Контактов в Telegram</div>
+        <div class="stat-card__value">${tgContacts.length}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card__label">Импортировано в CRM</div>
+        <div class="stat-card__value accent-primary">${importedCount}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card__label">Всего контактов в CRM</div>
+        <div class="stat-card__value">${crmTotal}</div>
+      </div>`;
+
+    actions.hidden = false;
+    actions.innerHTML = `
+      <button type="button" class="tg-quick-action" id="tgActionImportAll" ${notImportedCount ? "" : "disabled"}>
+        <span class="tg-quick-action__icon">⬇</span>Импортировать ${notImportedCount ? `${notImportedCount} новых` : "контакты"}
+      </button>
+      <button type="button" class="tg-quick-action" id="tgActionOpenCrm">
+        <span class="tg-quick-action__icon">☰</span>Открыть CRM
+      </button>
+      <button type="button" class="tg-quick-action" id="tgActionNewCampaign">
+        <span class="tg-quick-action__icon">✎</span>Создать кампанию
+      </button>
+      <button type="button" class="tg-quick-action" id="tgActionSync">
+        <span class="tg-quick-action__icon">↻</span>Синхронизировать
+      </button>`;
+
+    document.getElementById("tgActionImportAll").addEventListener("click", async () => {
+      tgContacts.filter((c) => !c.already_imported).forEach((c) => selected.add(c.telegram_id));
+      renderContactList();
+      document.getElementById("btnTgImport").click();
+    });
+    document.getElementById("tgActionOpenCrm").addEventListener("click", () => App.switchView("contacts"));
+    document.getElementById("tgActionNewCampaign").addEventListener("click", () => App.switchView("campaigns"));
+    document.getElementById("tgActionSync").addEventListener("click", () => loadContacts());
   }
 
   function wireImportPanelOnce() {
@@ -231,6 +294,7 @@ const Telegram = (() => {
       status = await API.tgStatus();
     } catch (err) {
       renderError(err.message);
+      renderStatsAndActions();
       return;
     }
 
@@ -238,6 +302,7 @@ const Telegram = (() => {
       if (step === "phone") renderPhoneStep();
       else if (step === "code") renderCodeStep();
       else if (step === "password") renderPasswordStep();
+      renderStatsAndActions();
       return;
     }
 

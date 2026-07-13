@@ -1,6 +1,7 @@
 /* Точка входа: переключение видов и инициализация модулей. */
 const App = (() => {
-  const views = ["dashboard", "chat", "contacts", "kanban", "telegram", "campaigns"];
+  const views = ["dashboard", "chat", "contacts", "telegram", "campaigns"];
+  let contactsMode = "table"; // "table" | "kanban" — CRM sub-view, not a top-level nav item
 
   function switchView(name) {
     views.forEach((v) => {
@@ -12,7 +13,7 @@ const App = (() => {
 
     if (name === "dashboard") Dashboard.render();
     if (name === "chat") { ChatView.render(); Folders.load(); }
-    if (name === "kanban") Kanban.render();
+    if (name === "contacts" && contactsMode === "kanban") Kanban.render();
     if (name === "telegram") Telegram.render();
     if (name === "campaigns") Campaigns.render();
     if (name !== "contacts") Contacts.stopChatPolling();
@@ -20,8 +21,28 @@ const App = (() => {
     if (name !== "campaigns") Campaigns.stopPolling();
   }
 
+  // ---- CRM sub-view toggle: Table (contacts list + detail) vs Kanban ----
+  function setContactsMode(mode) {
+    contactsMode = mode;
+    document.getElementById("contactsBodyTable").hidden = mode !== "table";
+    document.getElementById("contactsBodyKanban").hidden = mode !== "kanban";
+    document.querySelectorAll("#contactsModeToggle .seg-toggle__btn").forEach((btn) => {
+      const active = btn.dataset.mode === mode;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    if (mode === "kanban") Kanban.render();
+  }
+
+  function wireContactsModeToggle() {
+    document.querySelectorAll("#contactsModeToggle .seg-toggle__btn").forEach((btn) => {
+      btn.addEventListener("click", () => setContactsMode(btn.dataset.mode));
+    });
+  }
+
   async function goToContact(id) {
     switchView("contacts");
+    setContactsMode("table");
     await Contacts.reload();
     Contacts.selectContact(id);
   }
@@ -31,6 +52,7 @@ const App = (() => {
       btn.addEventListener("click", () => switchView(btn.dataset.view));
     });
     document.getElementById("btnAttention").addEventListener("click", () => switchView("dashboard"));
+    wireContactsModeToggle();
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
@@ -48,7 +70,7 @@ const App = (() => {
     switchView("dashboard");
   }
 
-  return { switchView, goToContact, init };
+  return { switchView, goToContact, init, setContactsMode };
 })();
 
 document.addEventListener("DOMContentLoaded", App.init);
