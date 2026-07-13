@@ -118,3 +118,4 @@ AI_LLM_MAX_MESSAGES = int(os.environ.get("AI_LLM_MAX_MESSAGES", "60"))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+LIVE_SCORE_MIN_INTERVAL = 60
