@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Контакты · CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/chatview.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ===== Left nav rail ===== -->
+  <nav class="railnav">
+    <div class="railnav__mark" title="Telegram Contacts CRM">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21.5 3 2.5 10.6c-1.2.5-1.2 1.2-.2 1.5l4.9 1.5 1.9 5.8c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.4-2.3 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.6-1.2Z" fill="currentColor"/></svg>
+    </div>
+    <button class="railnav__btn is-active" data-view="dashboard" title="Дашборд">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="12" width="8" height="9" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg>
+    </button>
+    <button class="railnav__btn" data-view="chat" title="Чат">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5h16a1 1 0 0 1 1 1V16a1 1 0 0 1-1 1H9l-4.5 4V17H4a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1Z"/></svg>
+      <span class="railnav__badge" id="chatUnreadBadge" hidden>0</span>
+    </button>
+    <button class="railnav__btn" data-view="contacts" title="Контакты">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c1.4-3.8 4.4-6 7.5-6s6.1 2.2 7.5 6"/></svg>
+    </button>
+    <button class="railnav__btn" data-view="kanban" title="Канбан">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="5.5" height="16" rx="1.2"/><rect x="9.7" y="4" width="5.5" height="10" rx="1.2"/><rect x="16.4" y="4" width="5.5" height="13" rx="1.2"/></svg>
+    </button>
+    <button class="railnav__btn" data-view="telegram" title="Telegram">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M21.5 3 2.5 10.6c-1.2.5-1.2 1.2-.2 1.5l4.9 1.5 1.9 5.8c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.4-2.3 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.6-1.2Z" fill="currentColor"/></svg>
+    </button>
+    <div class="railnav__spacer"></div>
+    <button class="railnav__btn" id="btnAttention" title="Требуют внимания">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r=".4" fill="currentColor"/></svg>
+      <span class="railnav__badge" id="attentionBadge" hidden>0</span>
+    </button>
+  </nav>
+
+  <!-- ===== Dashboard view ===== -->
+  <main class="view" id="view-dashboard">
+    <header class="view__head">
+      <div>
+        <h1>Дашборд</h1>
+        <p class="view__sub">Обзор знакомств и активных диалогов</p>
+      </div>
+    </header>
+
+    <section class="stat-grid" id="statGrid"></section>
+
+    <section class="dash-cols">
+      <div class="panel">
+        <h2 class="panel__title">Этапы воронки</h2>
+        <div id="stageBars" class="stage-bars"></div>
+      </div>
+      <div class="panel">
+        <h2 class="panel__title">Требуют внимания</h2>
+        <div id="attentionList" class="attention-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Chat view (messenger-first layout, preview build on mock data) ===== -->
+  <main class="view view--chat" id="view-chat" hidden>
+
+    <!-- Column 1: dialogue list -->
+    <aside class="chatlist">
+      <div class="chatlist__toolbar">
+        <div class="search">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" id="chatSearchInput" placeholder="Имя или username…">
+        </div>
+      </div>
+      <div class="chatlist__tabs">
+        <button class="chatlist__tab is-active" data-chatfilter="all">Все</button>
+        <button class="chatlist__tab" data-chatfilter="unread">Непрочитанные</button>
+        <button class="chatlist__tab" data-chatfilter="pinned">Избранное</button>
+      </div>
+      <div class="chatlist__items" id="chatListItems"></div>
+    </aside>
+
+    <!-- Column 2: message thread -->
+    <section class="thread" id="thread">
+      <div class="thread__empty" id="threadEmpty" hidden>
+        <p>Выберите диалог слева</p>
+      </div>
+      <div class="thread__body" id="threadBody">
+        <header class="thread__head">
+          <div class="thread__head-avatar" id="threadAvatar"></div>
+          <div class="thread__head-info">
+            <div class="thread__head-name" id="threadName"></div>
+            <div class="thread__head-status" id="threadStatus"></div>
+          </div>
+          <div class="thread__head-actions">
+            <button class="btn btn--icon" id="threadInfoToggle" title="Информация о контакте">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".4" fill="currentColor"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="thread__messages-wrap">
+          <div class="thread__messages" id="threadMessages"></div>
+          <button type="button" class="thread__new-msg-btn" id="threadNewMsgBtn" hidden>↓ Новые сообщения</button>
+        </div>
+
+        <div class="composer-context-bar" id="composerContextBar" hidden></div>
+        <form class="composer" id="composerForm">
+          <input type="file" id="fileAttachInput" hidden>
+          <button type="button" class="composer__btn" id="btnEmoji" title="Эмодзи">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M8.5 14c1 1.3 2.2 2 3.5 2s2.5-.7 3.5-2"/><circle cx="9" cy="9.5" r=".9" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r=".9" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button type="button" class="composer__btn" id="btnAttach" title="Прикрепить файл">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5 12.4 19a4.5 4.5 0 0 1-6.4-6.4l7.6-7.5a3 3 0 0 1 4.3 4.2L10.3 17a1.5 1.5 0 0 1-2.2-2.1l6.8-6.8"/></svg>
+          </button>
+          <div class="composer__field" id="composerField">
+            <textarea id="composerText" placeholder="Написать сообщение…" rows="1"></textarea>
+          </div>
+          <button type="button" class="composer__voice" id="composerVoice" title="Голосовое сообщение">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+          </button>
+          <button type="submit" class="composer__send" id="composerSend" title="Отправить" hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.6 21 12 3.4 3.4 3 10l12 2-12 2 .4 6.6Z"/></svg>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Column 3: contact info panel -->
+    <aside class="infopanel" id="infopanel">
+      <div class="infopanel__tabs">
+        <button class="co-tab is-active" data-infotab="profile">Инфо</button>
+        <button class="co-tab" data-infotab="history">История</button>
+      </div>
+
+      <div class="infopanel__pane" id="paneProfile">
+        <div class="infopanel__head">
+          <div class="co-avatar" id="infoAvatar"></div>
+          <div class="infopanel__head-name" id="infoName"></div>
+          <div class="infopanel__head-uname" id="infoUname"></div>
+        </div>
+
+        <div class="section-title">Контакт</div>
+        <div class="info-rows" id="infoContactRows"></div>
+
+        <div class="section-title">Статус и интерес</div>
+        <div class="co-fieldgrid">
+          <div class="co-field">
+            <label>Статус</label>
+            <select id="infoStatus">
+              <option value="new">Новый</option>
+              <option value="warm">Тёплый</option>
+              <option value="in_progress">В работе</option>
+              <option value="meeting_scheduled">Встреча назначена</option>
+              <option value="met">Встретились</option>
+              <option value="archive">Архив</option>
+            </select>
+          </div>
+          <div class="co-field">
+            <label>Интерес</label>
+            <div class="interest-slider">
+              <input type="range" id="infoInterest" min="1" max="10" value="5">
+              <span class="interest-slider__val" id="infoInterestVal">5</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">Теги</div>
+        <div class="tag-editor" id="infoTags"></div>
+
+        <div class="section-title">Заметки</div>
+        <textarea class="infopanel__notes" id="infoNotes" rows="4" placeholder="Свободные заметки о контакте…"></textarea>
+
+        <button class="btn btn--primary infopanel__save" id="infoSave" type="button">Сохранить изменения</button>
+      </div>
+
+      <div class="infopanel__pane" id="paneHistoryTab" hidden>
+        <div class="timeline" id="infoHistory"></div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ===== Contacts view (list + detail + history) ===== -->
+  <main class="view" id="view-contacts" hidden>
+    <aside class="colist">
+      <div class="colist__toolbar">
+        <div class="search">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" id="searchInput" placeholder="Имя или username…">
+        </div>
+        <button class="btn btn--primary btn--icon" id="btnNewContact" title="Новый контакт">+</button>
+      </div>
+
+      <div class="colist__filters">
+        <select id="filterStatus">
+          <option value="">Все статусы</option>
+        </select>
+        <select id="filterTag">
+          <option value="">Все теги</option>
+        </select>
+        <select id="filterInterest">
+          <option value="">Любой интерес</option>
+          <option value="8-10">Высокий 8–10</option>
+          <option value="4-7">Средний 4–7</option>
+          <option value="1-3">Низкий 1–3</option>
+        </select>
+      </div>
+
+      <div class="colist__items" id="contactItems"></div>
+    </aside>
+
+    <section class="codetail" id="codetail">
+      <div class="codetail__empty" id="codetailEmpty">
+        <p>Выберите контакт слева<br>или создайте новый</p>
+      </div>
+      <div class="codetail__body" id="codetailBody" hidden></div>
+    </section>
+  </main>
+
+  <!-- ===== Kanban view ===== -->
+  <main class="view" id="view-kanban" hidden>
+    <header class="view__head">
+      <div>
+        <h1>Канбан-доска</h1>
+        <p class="view__sub">Перетаскивайте карточки между этапами</p>
+      </div>
+    </header>
+    <div class="kanban" id="kanbanBoard"></div>
+  </main>
+
+  <!-- ===== Telegram view ===== -->
+  <main class="view" id="view-telegram" hidden>
+    <header class="view__head">
+      <div>
+        <h1>Telegram</h1>
+        <p class="view__sub">Вход в аккаунт и импорт контактов</p>
+      </div>
+    </header>
+
+    <div class="tg-layout">
+      <section class="panel tg-auth" id="tgAuthPanel"></section>
+
+      <section class="panel tg-import" id="tgImportPanel" hidden>
+        <div class="panel__title-row">
+          <h2 class="panel__title">Контакты Telegram</h2>
+          <div class="tg-import__actions">
+            <button class="btn" id="btnTgSelectAll">Выбрать все</button>
+            <button class="btn btn--primary" id="btnTgImport">Импортировать выбранные</button>
+          </div>
+        </div>
+        <div class="tg-contact-list" id="tgContactList"></div>
+      </section>
+    </div>
+  </main>
+
+</div>
+
+<!-- ===== Modal: forward message ===== -->
+<div class="modal-overlay" id="modalForward" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <h3>Переслать сообщение</h3>
+      <button class="modal__close" data-close-modal>&times;</button>
+    </div>
+    <div class="search" style="margin: 4px 20px 12px;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="text" id="forwardSearchInput" placeholder="Кому переслать…">
+    </div>
+    <div class="tg-contact-list" id="forwardDialogList" style="max-height:340px;overflow-y:auto;padding:0 12px 16px;"></div>
+  </div>
+</div>
+
+<!-- ===== Modal: new contact ===== -->
+<div class="modal-overlay" id="modalNewContact" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <h3>Новый контакт</h3>
+      <button class="modal__close" data-close-modal>&times;</button>
+    </div>
+    <form id="formNewContact" class="form">
+      <div class="form__row">
+        <label>Имя *<input type="text" name="name" required placeholder="Как зовут"></label>
+        <label>Username<input type="text" name="username" placeholder="@username"></label>
+      </div>
+      <div class="form__row">
+        <label>Ссылка на фото<input type="text" name="photo_url" placeholder="https://…"></label>
+        <label>Источник знакомства<input type="text" name="source" placeholder="Где познакомились"></label>
+      </div>
+      <div class="form__row">
+        <label>Статус
+          <select name="status" id="newContactStatus"></select>
+        </label>
+        <label>Интерес: <span id="newInterestVal">5</span>/10
+          <input type="range" name="interest_level" min="1" max="10" value="5" id="newInterestRange">
+        </label>
+      </div>
+      <div class="form__row">
+        <label style="flex:1;">Теги
+          <div class="tag-toggle-row" id="newContactTags">
+            <button type="button" class="tag-toggle tag-toggle--cold" data-tag="Холодная">Холодная</button>
+            <button type="button" class="tag-toggle tag-toggle--warm" data-tag="Тёплая">Тёплая</button>
+            <button type="button" class="tag-toggle tag-toggle--hot" data-tag="Горячая">Горячая</button>
+            <button type="button" class="tag-toggle tag-toggle--meeting" data-tag="Встреча">Встреча</button>
+            <button type="button" class="tag-toggle tag-toggle--archive" data-tag="Архив">Архив</button>
+          </div>
+        </label>
+      </div>
+      <label>Заметка<textarea name="notes" rows="3" placeholder="Первое впечатление, детали…"></textarea></label>
+      <div class="form__actions">
+        <button type="button" class="btn" data-close-modal>Отмена</button>
+        <button type="submit" class="btn btn--primary">Создать контакт</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script src="/js/cache.js"></script>
+<script src="/js/media.js"></script>
+<script src="/js/chatview.js"></script>
+<script src="/js/dashboard.js"></script>
+<script src="/js/contacts.js"></script>
+<script src="/js/kanban.js"></script>
+<script src="/js/telegram.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

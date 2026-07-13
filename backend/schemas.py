@@ -1,0 +1,339 @@
+"""
+Pydantic schemas used for request validation and API responses.
+Kept separate from the ORM models so the API contract can evolve
+independently of the storage layer.
+"""
+from datetime import datetime
+from typing import Optional, List
+
+from pydantic import BaseModel, Field, ConfigDict
+
+from .models import ContactStatus
+
+
+# ---------- Tags ----------
+
+class TagOut(BaseModel):
+    id: int
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------- Interactions ----------
+
+class InteractionBase(BaseModel):
+    note: str = Field(..., min_length=1)
+    event_type: str = Field(default="note")
+    occurred_at: Optional[datetime] = None
+
+
+class InteractionCreate(InteractionBase):
+    pass
+
+
+class InteractionOut(InteractionBase):
+    id: int
+    contact_id: int
+    occurred_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------- Contacts ----------
+
+class ContactBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=150)
+    username: Optional[str] = None
+    telegram_id: Optional[int] = None
+    photo_url: Optional[str] = None
+    source: Optional[str] = None
+    status: ContactStatus = ContactStatus.NEW
+    interest_level: int = Field(default=5, ge=1, le=10)
+    notes: Optional[str] = None
+    next_task: Optional[str] = None
+    next_task_date: Optional[datetime] = None
+    last_contact_at: Optional[datetime] = None
+
+
+class ContactCreate(ContactBase):
+    tags: Optional[List[str]] = []
+
+
+class ContactUpdate(BaseModel):
+    """All fields optional -- used for PATCH-style partial updates."""
+    name: Optional[str] = Field(None, min_length=1, max_length=150)
+    username: Optional[str] = None
+    telegram_id: Optional[int] = None
+    photo_url: Optional[str] = None
+    source: Optional[str] = None
+    status: Optional[ContactStatus] = None
+    interest_level: Optional[int] = Field(None, ge=1, le=10)
+    notes: Optional[str] = None
+    next_task: Optional[str] = None
+    next_task_date: Optional[datetime] = None
+    last_contact_at: Optional[datetime] = None
+    tags: Optional[List[str]] = None
+
+
+class ContactStatusUpdate(BaseModel):
+    status: ContactStatus
+
+
+class TrendOut(BaseModel):
+    direction: str  # "up" | "flat" | "down" | "unknown"
+    label: str
+    delta: Optional[float] = None
+
+
+class ContactOut(ContactBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    tags: List[TagOut] = []
+
+    # Contact Intelligence (Этап 9) — только для чтения, обновляется
+    # исключительно через POST /contacts/{id}/analyze.
+    interest_score: int = 0
+    interest_category: Optional[str] = None
+    suggested_status: Optional[ContactStatus] = None
+    next_action: Optional[str] = None
+    ai_summary: Optional[str] = None
+    suggested_reply: Optional[str] = None
+    ai_source: Optional[str] = None
+    trend: Optional[TrendOut] = None
+    analyzed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContactDetailOut(ContactOut):
+    interactions: List[InteractionOut] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------- Contact Intelligence (AI-анализ) ----------
+
+class AnalysisSignals(BaseModel):
+    their_initiative_ratio: Optional[float] = None
+    avg_response_minutes: Optional[float] = None
+    avg_message_length: Optional[float] = None
+    question_ratio: Optional[float] = None
+    meeting_mentions: Optional[int] = None
+
+
+class AnalysisOut(BaseModel):
+    contact_id: int
+    interest_score: int
+    interest_category: str
+    current_status: ContactStatus
+    current_status_label: str
+    suggested_status: ContactStatus
+    suggested_status_label: str
+    status_change_suggested: bool
+    next_action: Optional[str] = None
+    ai_summary: Optional[str] = None
+    suggested_reply: Optional[str] = None
+    ai_source: Optional[str] = None
+    analyzed_at: datetime
+    messages_analyzed: int = 0
+    trend: Optional[TrendOut] = None
+    signals: AnalysisSignals
+
+
+# Лёгкий вход/выход для "живой" оценки во время просмотра переписки
+# (см. /live-score в routers/contacts.py). В отличие от AnalysisOut,
+# считается только по уже загруженному на клиенте списку сообщений —
+# без похода в Telegram и без вызова LLM-провайдера — и не пишется в БД.
+class LiveScoreMessageIn(BaseModel):
+    text: str = ""
+    date: Optional[datetime] = None
+    out: bool = False
+
+
+class LiveScoreIn(BaseModel):
+    messages: List[LiveScoreMessageIn] = Field(default_factory=list)
+
+
+class LiveScoreOut(BaseModel):
+    contact_id: int
+    interest_score: int
+    interest_category: str
+    suggested_status: ContactStatus
+    suggested_status_label: str
+    status_change_suggested: bool
+    messages_analyzed: int = 0
+    trend: Optional[TrendOut] = None
+
+
+# ---- Глубокий AI-отчёт (см. ai_gemini.generate_deep_report) ----
+# Требует Gemini — локального аналога у этого отчёта нет (в отличие от
+# AnalysisOut/LiveScoreOut, где число всегда есть за счёт local-эвристики).
+
+class PctSplitOut(BaseModel):
+    me: int
+    her: int
+
+
+class DeepReportOut(BaseModel):
+    contact_id: int
+    generated_at: datetime
+    interest_score: int
+    category: str
+    trend: str
+    meeting_probability: int
+    date_invite_probability: int
+    ghost_probability: int
+    pressure_score: int
+    initiative: PctSplitOut
+    investment: PctSplitOut
+    conversation_driver: PctSplitOut
+    green_flags: List[str] = Field(default_factory=list)
+    red_flags: List[str] = Field(default_factory=list)
+    mistakes: List[str] = Field(default_factory=list)
+    improvements: List[str] = Field(default_factory=list)
+    next_action: str
+    reasoning: str
+
+
+class TimelineEventOut(BaseModel):
+    id: str
+    kind: str
+    occurred_at: datetime
+    title: str
+    note: str = ""
+
+
+class ReminderOut(BaseModel):
+    contact_id: int
+    name: str
+    photo_url: Optional[str] = None
+    status: ContactStatus
+    status_label: str
+    days_since_contact: Optional[int] = None
+    text: str
+
+
+# ---------- Dashboard ----------
+
+class StatusCount(BaseModel):
+    status: ContactStatus
+    label: str
+    count: int
+
+
+class DashboardOut(BaseModel):
+    total_contacts: int
+    new_this_week: int
+    active_dialogues: int          # warm + in_progress + meeting_scheduled
+    needs_attention: int           # no contact in > 7 days, not archived
+    by_status: List[StatusCount]
+
+
+# ---------- Telegram ----------
+
+class TelegramUserOut(BaseModel):
+    telegram_id: int
+    name: str
+    username: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class TelegramStatusOut(BaseModel):
+    authorized: bool
+    needs_password: bool = False
+    user: Optional[TelegramUserOut] = None
+
+
+class TelegramSendCodeIn(BaseModel):
+    phone: str = Field(..., min_length=5)
+
+
+class TelegramSignInIn(BaseModel):
+    phone: str = Field(..., min_length=5)
+    code: Optional[str] = None
+    password: Optional[str] = None
+
+
+class TelegramContactOut(TelegramUserOut):
+    already_imported: bool = False
+
+
+class TelegramImportIn(BaseModel):
+    telegram_ids: List[int] = Field(..., min_length=1)
+    default_status: ContactStatus = ContactStatus.NEW
+    tags: Optional[List[str]] = []
+
+
+class TelegramImportResultOut(BaseModel):
+    imported: int
+    skipped: int
+
+
+class TelegramReplyRefOut(BaseModel):
+    id: int
+    text: str = ""
+
+
+class TelegramMediaOut(BaseModel):
+    kind: str  # photo | video | video_note | animation | voice | audio | document | sticker
+    file_name: Optional[str] = None
+    size: Optional[int] = None
+    mime: Optional[str] = None
+    duration: Optional[float] = None
+
+
+class TelegramMessageOut(BaseModel):
+    id: int
+    dialog_id: int
+    text: str
+    date: Optional[datetime] = None
+    out: bool
+    status: Optional[str] = None  # "sent" | "read" — только для исходящих (out=True)
+    edited: bool = False
+    pinned: bool = False
+    reply_to: Optional[TelegramReplyRefOut] = None
+    media: Optional[TelegramMediaOut] = None
+
+
+class TelegramSendMessageIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    reply_to: Optional[int] = None
+
+
+class TelegramEditMessageIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+class TelegramForwardIn(BaseModel):
+    to_telegram_id: int
+
+
+class TelegramResolveIn(BaseModel):
+    username: str = Field(..., min_length=1)
+
+
+class TelegramDialogOut(BaseModel):
+    telegram_id: int
+    name: str
+    username: Optional[str] = None
+    phone: Optional[str] = None
+    has_photo: bool = False
+    last_message_text: Optional[str] = None
+    last_message_kind: str = "text"
+    last_message_date: Optional[datetime] = None
+    last_message_out: bool = False
+    unread_count: int = 0
+    pinned: bool = False
+    online: bool = False
+    last_seen: Optional[datetime] = None
+    last_seen_kind: str = "unknown"
+    typing: bool = False
+
+
+class TelegramPresenceOut(BaseModel):
+    online: bool = False
+    last_seen: Optional[datetime] = None
+    last_seen_kind: str = "unknown"
+    typing: bool = False

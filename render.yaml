@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: telegram-crm
+    runtime: docker
+    plan: starter          # free-план не поддерживает постоянные диски
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_USERS          # login:pass,login2:pass2 — задать в Render Dashboard
+        sync: false
+      - key: AI_PROVIDER
+        value: local
+      - key: GEMINI_API_KEY     # опционально, если AI_PROVIDER=gemini
+        sync: false
+      - key: TG_API_ID          # опционально, свои my.telegram.org credentials
+        sync: false
+      - key: TG_API_HASH
+        sync: false
+    disk:
+      name: crm-data
+      mountPath: /app/data
+      sizeGB: 5

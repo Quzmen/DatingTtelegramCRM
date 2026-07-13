@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn>=0.29
+sqlalchemy>=2.0
+pydantic>=2.6
+python-multipart>=0.0.9
+telethon>=1.36
+pysocks>=1.7
+httpx[socks]>=0.27
+python-dotenv>=1.0

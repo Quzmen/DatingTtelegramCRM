@@ -1,0 +1,11 @@
+data/
+.git
+.gitignore
+.idea/
+__pycache__/
+*.pyc
+.venv/
+.env
+*.session
+crm.db
+README_DEPLOY.md
