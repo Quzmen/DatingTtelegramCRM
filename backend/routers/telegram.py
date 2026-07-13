@@ -2,13 +2,13 @@ import mimetypes
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas, models, config
 from ..database import get_db
-from ..telegram_service import telegram_service, TelegramAuthError
+from ..telegram_service import telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
@@ -154,6 +154,20 @@ async def send_message(telegram_id: int, data: schemas.TelegramSendMessageIn):
         return await telegram_service.send_message(telegram_id, data.text, reply_to=data.reply_to)
     except TelegramAuthError as e:
         _err(e)
+
+
+@router.post("/bulk-send", response_model=schemas.TelegramBulkSendOut)
+async def bulk_send(data: schemas.TelegramBulkSendIn, background_tasks: BackgroundTasks):
+    """Минимальная массовая отправка: список telegram_id + текст.
+    Без сегментов/фильтров/шаблонов/статусов кампании — просто ставит
+    рассылку в фон с паузой BULK_SEND_DELAY_SECONDS между сообщениями
+    и сразу отвечает, не дожидаясь завершения (500 диалогов * 15с
+    иначе держали бы запрос ~2 часа)."""
+    background_tasks.add_task(telegram_service.bulk_send, data.telegram_ids, data.text)
+    return schemas.TelegramBulkSendOut(
+        queued=len(data.telegram_ids),
+        delay_seconds=BULK_SEND_DELAY_SECONDS,
+    )
 
 
 @router.post("/messages/{telegram_id}/file", response_model=schemas.TelegramMessageOut)

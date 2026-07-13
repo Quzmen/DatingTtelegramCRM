@@ -1,6 +1,6 @@
 /* Точка входа: переключение видов и инициализация модулей. */
 const App = (() => {
-  const views = ["dashboard", "chat", "contacts", "kanban", "telegram"];
+  const views = ["dashboard", "chat", "contacts", "kanban", "telegram", "campaigns"];
 
   function switchView(name) {
     views.forEach((v) => {
@@ -14,8 +14,10 @@ const App = (() => {
     if (name === "chat") { ChatView.render(); Folders.load(); }
     if (name === "kanban") Kanban.render();
     if (name === "telegram") Telegram.render();
+    if (name === "campaigns") Campaigns.render();
     if (name !== "contacts") Contacts.stopChatPolling();
     if (name !== "chat") ChatView.stopPolling();
+    if (name !== "campaigns") Campaigns.stopPolling();
   }
 
   async function goToContact(id) {

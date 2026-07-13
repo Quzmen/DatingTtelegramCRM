@@ -21,6 +21,7 @@ database.get_db/SessionLocal). После успешного входа пере
 печатает…) через фоновый обработчик событий Telethon.
 """
 import asyncio
+import logging
 import time
 from pathlib import Path
 from typing import Optional
@@ -44,6 +45,10 @@ from . import config, crud
 from . import sync_service
 from .database import SessionLocal
 from .telegram_utils import _status_info, _user_out, _media_info
+
+logger = logging.getLogger("telegram-crm")
+
+BULK_SEND_DELAY_SECONDS = 15
 
 
 class TelegramAuthError(Exception):
@@ -445,6 +450,50 @@ class TelegramService:
             "reply_to": {"id": reply_to, "text": ""} if reply_to else None,
             "media": None,
         }
+
+    async def get_entity_vars(self, telegram_id: int) -> dict:
+        """Возвращает {name, username, first_name} для подстановки в
+        шаблон кампании (см. campaign_service.render_template). При
+        любой ошибке резолва отдаёт пустые строки -- рассылка не должна
+        падать из-за одного проблемного получателя, это дело
+        campaign_service (там ошибка/пропуск логируется по получателю)."""
+        try:
+            client = await self._get_client()
+            entity = await _with_timeout(client.get_entity(telegram_id), "поиск получателя")
+            info = _user_out(entity)
+            return {
+                "name": info["name"] or "",
+                "username": info["username"] or "",
+                "first_name": getattr(entity, "first_name", None) or "",
+            }
+        except Exception:
+            return {"name": "", "username": "", "first_name": ""}
+
+    async def bulk_send(self, telegram_ids: list[int], text: str) -> None:
+        """Отправляет один и тот же текст по списку диалогов с паузой
+        BULK_SEND_DELAY_SECONDS между сообщениями. Синхронный обход
+        (не asyncio.gather) — пауза должна выдерживаться между каждой
+        парой отправок, а не просто ограничивать конкурентность.
+
+        Ошибка на одном диалоге не останавливает рассылку остальных;
+        FloodWaitError уважается отдельной паузой сверх обычной задержки,
+        чтобы не подставлять аккаунт под более жёсткий бан от Telegram.
+        Ничего не пишет в БД и не отслеживает статус — вызывающий код
+        (background task) сам решает, что делать с логами.
+        """
+        total = len(telegram_ids)
+        for i, telegram_id in enumerate(telegram_ids, start=1):
+            try:
+                await self.send_message(telegram_id, text)
+                logger.info("bulk_send: отправлено %s/%s -> %s", i, total, telegram_id)
+            except FloodWaitError as e:
+                logger.warning("bulk_send: FloodWait %sс на %s, ждём и пропускаем", e.seconds, telegram_id)
+                await asyncio.sleep(e.seconds)
+                continue
+            except Exception:
+                logger.exception("bulk_send: ошибка отправки на %s", telegram_id)
+            if i < total:
+                await asyncio.sleep(BULK_SEND_DELAY_SECONDS)
 
     async def send_file(
         self, telegram_id: int, file_path: str, caption: Optional[str] = None,

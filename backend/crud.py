@@ -3,6 +3,7 @@ Data-access layer. All direct DB queries live here so routers stay
 thin and the query logic is reusable / testable in one place.
 """
 from datetime import datetime, timedelta
+import json
 from typing import Optional, List
 
 from sqlalchemy import or_
@@ -612,3 +613,159 @@ def mark_outbox_read(db: Session, dialog_telegram_id: int, max_id: int) -> None:
         .update({"status": "read"}, synchronize_session=False)
     )
     db.commit()
+
+
+# ---------------------------------------------------------------
+# Кампании массовых рассылок
+# ---------------------------------------------------------------
+
+def campaign_out(campaign: models.Campaign) -> schemas.CampaignOut:
+    out = schemas.CampaignOut.model_validate(campaign)
+    out.has_image = bool(campaign.image_path)
+    out.folder_ids = campaign.folder_ids
+    out.filters = schemas.CampaignFiltersIn(**campaign.filters) if campaign.filters else schemas.CampaignFiltersIn()
+    return out
+
+
+def create_campaign(db: Session, data: schemas.CampaignCreateIn) -> schemas.CampaignOut:
+    status = (
+        models.CampaignStatus.READY
+        if data.message_text.strip() and data.folder_ids
+        else models.CampaignStatus.DRAFT
+    )
+    campaign = models.Campaign(
+        name=data.name.strip(),
+        message_text=data.message_text,
+        folder_ids_json=json.dumps(data.folder_ids),
+        filters_json=json.dumps(data.filters.model_dump()),
+        status=status,
+    )
+    db.add(campaign)
+    db.commit()
+    db.refresh(campaign)
+    return campaign_out(campaign)
+
+
+def list_campaigns(db: Session) -> List[schemas.CampaignOut]:
+    campaigns = db.query(models.Campaign).order_by(models.Campaign.created_at.desc()).all()
+    return [campaign_out(c) for c in campaigns]
+
+
+def get_campaign(db: Session, campaign_id: int) -> Optional[models.Campaign]:
+    return db.query(models.Campaign).filter(models.Campaign.id == campaign_id).first()
+
+
+def update_campaign(db: Session, campaign: models.Campaign, data: schemas.CampaignUpdateIn) -> schemas.CampaignOut:
+    if data.name is not None:
+        campaign.name = data.name.strip()
+    if data.message_text is not None:
+        campaign.message_text = data.message_text
+    if data.folder_ids is not None:
+        campaign.folder_ids_json = json.dumps(data.folder_ids)
+    if data.filters is not None:
+        campaign.filters_json = json.dumps(data.filters.model_dump())
+    if campaign.status in (models.CampaignStatus.DRAFT, models.CampaignStatus.READY):
+        campaign.status = (
+            models.CampaignStatus.READY
+            if campaign.message_text.strip() and campaign.folder_ids
+            else models.CampaignStatus.DRAFT
+        )
+    db.commit()
+    db.refresh(campaign)
+    return campaign_out(campaign)
+
+
+def delete_campaign(db: Session, campaign: models.Campaign) -> None:
+    db.delete(campaign)
+    db.commit()
+
+
+def set_campaign_status(db: Session, campaign: models.Campaign, status: "models.CampaignStatus") -> None:
+    campaign.status = status
+    db.commit()
+
+
+def resolve_campaign_recipients(
+    db: Session, folder_ids: List[int], filters: schemas.CampaignFiltersIn,
+) -> tuple[List[int], int, dict]:
+    """Применяет фильтры получателей (раздел ФИЛЬТРЫ ПОЛУЧАТЕЛЕЙ ТЗ) к
+    диалогам из выбранных папок. Возвращает (итоговый список telegram_id,
+    количество диалогов в сегментах до фильтрации, разбивку исключённых
+    по причине) -- второе и третье нужны для предпросмотра.
+
+    Честно про два фильтра, которые локальная модель данных CRM не
+    поддерживает напрямую:
+    - exclude_deleted: у Dialog нет флага "диалог удалён в Telegram"
+      (см. models.Dialog) -- фильтр не исключает ничего, пока такой
+      флаг не появится в синхронизации.
+    - active_only: трактуется как "есть хотя бы одно синхронизированное
+      сообщение" (last_message_date IS NOT NULL), а не как признак
+      "диалог не заброшен" в каком-то ином, более точном смысле.
+    """
+    query = db.query(models.Dialog)
+    if folder_ids:
+        query = query.filter(models.Dialog.folder_id.in_(folder_ids))
+    dialogs = query.options(joinedload(models.Dialog.contact)).all()
+    total_in_segments = len(dialogs)
+
+    excluded_reasons: dict = {}
+    kept: List[models.Dialog] = []
+
+    for d in dialogs:
+        reason = None
+        if filters.active_only and d.last_message_date is None:
+            reason = "not_active"
+        elif filters.not_replied_days is not None:
+            cutoff = datetime.utcnow() - timedelta(days=filters.not_replied_days)
+            # "не отвечал X дней": последнее сообщение в диалоге -- наше,
+            # и с тех пор прошло меньше X дней -> собеседник ещё не
+            # "молчал" нужный срок, исключаем из рассылки.
+            if not (d.last_message_out and d.last_message_date and d.last_message_date <= cutoff):
+                reason = "not_replied_days"
+        if reason is None and filters.exclude_archived:
+            if d.contact and d.contact.status == models.ContactStatus.ARCHIVE:
+                reason = "exclude_archived"
+        if reason is None and filters.crm_stage is not None:
+            if not d.contact or d.contact.status != filters.crm_stage:
+                reason = "crm_stage"
+        if reason is None and filters.tag_ids:
+            contact_tag_ids = {t.id for t in d.contact.tags} if d.contact else set()
+            if not contact_tag_ids.intersection(filters.tag_ids):
+                reason = "tag_ids"
+
+        if reason is None:
+            kept.append(d)
+        else:
+            excluded_reasons[reason] = excluded_reasons.get(reason, 0) + 1
+
+    return [d.telegram_id for d in kept], total_in_segments, excluded_reasons
+
+
+def create_campaign_log(
+    db: Session, campaign_id: int, telegram_id: int, result: str, error_text: Optional[str] = None,
+) -> None:
+    log = models.CampaignLog(
+        campaign_id=campaign_id, telegram_id=telegram_id, result=result, error_text=error_text,
+    )
+    db.add(log)
+    db.commit()
+
+
+def list_campaign_logs(db: Session, campaign_id: int, limit: int = 200) -> List[models.CampaignLog]:
+    return (
+        db.query(models.CampaignLog)
+        .filter(models.CampaignLog.campaign_id == campaign_id)
+        .order_by(models.CampaignLog.processed_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def list_stuck_running_campaigns(db: Session) -> List[models.Campaign]:
+    """Кампании, которые остались в статусе RUNNING на диске -- то есть
+    процесс упал/перезапустился посреди рассылки (см. СИНХРОНИЗАЦИЯ ТЗ,
+    \"восстанавливать незавершённые кампании\"). Не резюмируются
+    автоматически (чтобы не отправить сообщения повторно/непредсказуемо
+    без ведома пользователя) -- переводятся в PAUSED, откуда их можно
+    осознанно продолжить."""
+    return db.query(models.Campaign).filter(models.Campaign.status == models.CampaignStatus.RUNNING).all()

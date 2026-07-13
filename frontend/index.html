@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/style.css">
 <link rel="stylesheet" href="/css/chatview.css">
+<link rel="stylesheet" href="/css/campaigns.css">
 </head>
 <body>
 
@@ -33,6 +34,9 @@
     </button>
     <button class="railnav__btn" data-view="telegram" title="Telegram">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M21.5 3 2.5 10.6c-1.2.5-1.2 1.2-.2 1.5l4.9 1.5 1.9 5.8c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.4-2.3 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.6-1.2Z" fill="currentColor"/></svg>
+    </button>
+    <button class="railnav__btn" data-view="campaigns" title="Кампании">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11v2a2 2 0 0 0 2 2h1l3.5 4.5V6.5L6 11H5a2 2 0 0 0-2 2Z"/><path d="M14 8.5a5 5 0 0 1 0 7"/><path d="M17.3 5.5a9 9 0 0 1 0 13"/></svg>
     </button>
     <div class="railnav__spacer"></div>
     <button class="railnav__btn" id="btnAttention" title="Требуют внимания">
@@ -258,6 +262,18 @@
     </div>
   </main>
 
+  <!-- ===== Campaigns view ===== -->
+  <main class="view" id="view-campaigns" hidden>
+    <header class="view__head">
+      <div>
+        <h1>Кампании сообщений</h1>
+        <p class="view__sub">Массовая рассылка по папкам с фильтрами и шаблонами</p>
+      </div>
+      <button class="btn btn--primary" id="btnNewCampaign">+ Новая кампания</button>
+    </header>
+    <div class="campaign-list" id="campaignList"></div>
+  </main>
+
 </div>
 
 <!-- ===== Modal: forward message ===== -->
@@ -328,6 +344,7 @@
 <script src="/js/contacts.js"></script>
 <script src="/js/kanban.js"></script>
 <script src="/js/telegram.js"></script>
+<script src="/js/campaigns.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

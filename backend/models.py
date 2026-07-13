@@ -242,3 +242,117 @@ class Message(Base):
     status = Column(String(10), nullable=True)          # sent | read (только для исходящих)
     edited = Column(Boolean, nullable=False, default=False)
     deleted = Column(Boolean, nullable=False, default=False)
+
+# ---------------------------------------------------------------
+# Кампании массовых рассылок
+# ---------------------------------------------------------------
+
+class CampaignStatus(str, enum.Enum):
+    DRAFT = "draft"                            # Черновик
+    READY = "ready"                             # Готова к запуску
+    RUNNING = "running"                          # Выполняется
+    PAUSED = "paused"                            # Приостановлена
+    COMPLETED = "completed"                      # Завершена
+    COMPLETED_WITH_ERRORS = "completed_with_errors"  # Завершена с ошибками
+
+
+CAMPAIGN_STATUS_LABELS = {
+    CampaignStatus.DRAFT: "Черновик",
+    CampaignStatus.READY: "Готова к запуску",
+    CampaignStatus.RUNNING: "Выполняется",
+    CampaignStatus.PAUSED: "Приостановлена",
+    CampaignStatus.COMPLETED: "Завершена",
+    CampaignStatus.COMPLETED_WITH_ERRORS: "Завершена с ошибками",
+}
+
+
+class Campaign(Base):
+    """Кампания массовой рассылки по сегментам (папкам) диалогов.
+
+    Список получателей не хранится как отдельная таблица строк "на
+    каждого получателя свою запись перед запуском" -- вместо этого
+    recipient_ids (уже посчитанный на момент запуска, после всех
+    фильтров, список telegram_id) кладётся одним JSON-массивом сюда,
+    а сам прогресс/результат по каждому получателю живёт в CampaignLog.
+    Это и есть snapshot получателей на момент запуска, на который
+    ссылается ТЗ (папки/фильтры могут поменяться уже во время рассылки,
+    но кампания идёт по списку, зафиксированному в момент старта)."""
+    __tablename__ = "campaigns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(150), nullable=False)
+    status = Column(Enum(CampaignStatus), default=CampaignStatus.DRAFT, nullable=False, index=True)
+
+    message_text = Column(Text, nullable=False, default="")
+    image_path = Column(String(500), nullable=True)  # локальный путь к сохранённому вложению кампании
+
+    folder_ids_json = Column(Text, nullable=True)     # выбранные сегменты: JSON-массив id папок
+    filters_json = Column(Text, nullable=True)        # применённые фильтры получателей: JSON-объект
+
+    recipient_ids_json = Column(Text, nullable=True)  # snapshot telegram_id получателей после фильтрации на момент запуска
+    cursor = Column(Integer, nullable=False, default=0)  # индекс в recipient_ids, на котором остановились (пауза/рестарт)
+
+    total_selected = Column(Integer, nullable=False, default=0)
+    processed_count = Column(Integer, nullable=False, default=0)
+    completed_count = Column(Integer, nullable=False, default=0)
+    skipped_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    logs = relationship(
+        "CampaignLog", back_populates="campaign",
+        cascade="all, delete-orphan", order_by="desc(CampaignLog.processed_at)",
+    )
+
+    @property
+    def folder_ids(self):
+        return _json_load_list(self.folder_ids_json)
+
+    @property
+    def filters(self):
+        return _json_load_dict(self.filters_json)
+
+    @property
+    def recipient_ids(self):
+        return _json_load_list(self.recipient_ids_json)
+
+
+class CampaignLog(Base):
+    """Журнал выполнения: одна строка на каждый обработанный диалог
+    кампании (см. раздел ЖУРНАЛ ТЗ)."""
+    __tablename__ = "campaign_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)
+    processed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    result = Column(String(20), nullable=False)   # sent | skipped | error
+    error_text = Column(Text, nullable=True)
+
+    campaign = relationship("Campaign", back_populates="logs")
+
+
+def _json_load_list(raw):
+    if not raw:
+        return []
+    import json
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _json_load_dict(raw):
+    if not raw:
+        return {}
+    import json
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}

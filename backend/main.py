@@ -17,9 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from telethon.errors import AuthKeyUnregisteredError
 
 from . import models
-from .database import engine, run_migrations
-from .routers import contacts, dashboard, telegram, admin, folders
+from .database import engine, run_migrations, SessionLocal
+from .routers import contacts, dashboard, telegram, admin, folders, campaigns
 from .telegram_service import telegram_service
+from . import crud
 
 logger = logging.getLogger("telegram-crm")
 
@@ -33,6 +34,7 @@ app.include_router(dashboard.router)
 app.include_router(telegram.router)
 app.include_router(admin.router)
 app.include_router(folders.router)
+app.include_router(campaigns.router)
 
 
 @app.on_event("startup")
@@ -47,6 +49,25 @@ async def _sync_telegram_on_startup() -> None:
         await telegram_service.sync_now()
     except Exception:
         logger.exception("Не удалось выполнить синхронизацию диалогов при старте")
+
+    # Восстанавливать незавершённые кампании (см. СИНХРОНИЗАЦИЯ ТЗ):
+    # если процесс упал/перезапустился, пока кампания была RUNNING,
+    # она осталась бы в БД в этом статусе навсегда. Переводим такие
+    # кампании в PAUSED -- не резюмируем автоматически, чтобы не
+    # разослать сообщения повторно без ведома пользователя; из PAUSED
+    # их можно осознанно продолжить через /resume, и cursor не потерян.
+    db = SessionLocal()
+    try:
+        stuck = crud.list_stuck_running_campaigns(db)
+        for campaign in stuck:
+            campaign.status = models.CampaignStatus.PAUSED
+        if stuck:
+            db.commit()
+            logger.info("Восстановлено %s незавершённых кампаний (переведены в паузу)", len(stuck))
+    except Exception:
+        logger.exception("Не удалось восстановить незавершённые кампании при старте")
+    finally:
+        db.close()
 
 
 @app.exception_handler(AuthKeyUnregisteredError)

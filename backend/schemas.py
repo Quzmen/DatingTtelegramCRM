@@ -8,7 +8,7 @@ from typing import Optional, List
 
 from pydantic import BaseModel, Field, ConfigDict
 
-from .models import ContactStatus
+from .models import ContactStatus, CampaignStatus
 
 
 # ---------- Tags ----------
@@ -337,6 +337,19 @@ class TelegramSendMessageIn(BaseModel):
     reply_to: Optional[int] = None
 
 
+class TelegramBulkSendIn(BaseModel):
+    """Минимальный вход для массовой отправки: список диалогов + текст.
+    Без сегментов/фильтров/шаблонов — это делает модуль кампаний позже."""
+    telegram_ids: List[int] = Field(..., min_items=1, max_items=500)
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+class TelegramBulkSendOut(BaseModel):
+    queued: int
+    delay_seconds: int
+
+
+
 class TelegramEditMessageIn(BaseModel):
     text: str = Field(..., min_length=1, max_length=4000)
 
@@ -373,3 +386,82 @@ class TelegramPresenceOut(BaseModel):
     last_seen: Optional[datetime] = None
     last_seen_kind: str = "unknown"
     typing: bool = False
+
+
+# ---------- Кампании массовых рассылок ----------
+
+class CampaignFiltersIn(BaseModel):
+    """Все поля опциональны — фильтр применяется, только если задан.
+    Соответствует разделу ФИЛЬТРЫ ПОЛУЧАТЕЛЕЙ ТЗ."""
+    not_replied_days: Optional[int] = Field(None, ge=0, description="не отвечал X дней")
+    active_only: bool = False              # только активные диалоги (есть синхронизированная переписка)
+    exclude_archived: bool = False         # исключить архив (Contact.status == ARCHIVE)
+    exclude_deleted: bool = False          # исключить удалённые диалоги
+    crm_stage: Optional[ContactStatus] = None  # только выбранная стадия CRM
+    tag_ids: Optional[List[int]] = None        # только выбранные теги
+
+
+class CampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=150)
+    message_text: str = Field(default="", max_length=4000)
+    folder_ids: List[int] = Field(default_factory=list)
+    filters: CampaignFiltersIn = Field(default_factory=CampaignFiltersIn)
+
+
+class CampaignUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=150)
+    message_text: Optional[str] = Field(None, max_length=4000)
+    folder_ids: Optional[List[int]] = None
+    filters: Optional[CampaignFiltersIn] = None
+
+
+class CampaignPreviewOut(BaseModel):
+    """Ответ на предпросмотр: соответствует разделу ПРЕДПРОСМОТР ТЗ."""
+    folder_ids: List[int]
+    total_dialogs_in_segments: int          # до фильтрации
+    total_after_filters: int                # после фильтрации -- это и пойдёт в рассылку
+    excluded_count: int
+    excluded_reasons: dict                  # {"not_replied_days": 3, "exclude_archived": 5, ...}
+    applied_filters: CampaignFiltersIn
+    message_text: str
+    has_image: bool
+
+
+class CampaignOut(BaseModel):
+    id: int
+    name: str
+    status: CampaignStatus
+    message_text: str
+    has_image: bool = False
+    folder_ids: List[int] = Field(default_factory=list)
+    filters: CampaignFiltersIn = Field(default_factory=CampaignFiltersIn)
+
+    total_selected: int = 0
+    processed_count: int = 0
+    completed_count: int = 0
+    skipped_count: int = 0
+    error_count: int = 0
+
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CampaignStartIn(BaseModel):
+    """Запуск возможен только после подтверждения пользователем (см.
+    ПРЕДПРОСМОТР ТЗ) -- confirm должен быть явно True, иначе эндпоинт
+    отклоняет запрос вместо того чтобы молча считать отсутствие
+    параметра согласием."""
+    confirm: bool = Field(..., description="Пользователь подтвердил предпросмотр и запуск")
+
+
+class CampaignLogOut(BaseModel):
+    id: int
+    telegram_id: int
+    processed_at: datetime
+    result: str
+    error_text: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)

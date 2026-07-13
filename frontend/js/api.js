@@ -126,6 +126,30 @@ const API = (() => {
 
     // contacts — telegram link
     getContactByTelegramId: (telegramId) => request(`/contacts/by-telegram/${telegramId}`),
+
+    // campaigns (массовые рассылки)
+    listCampaigns: () => request(`/campaigns`),
+    createCampaign: (data) => request(`/campaigns`, { method: "POST", body: JSON.stringify(data) }),
+    getCampaign: (id) => request(`/campaigns/${id}`),
+    updateCampaign: (id, data) => request(`/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteCampaign: (id) => request(`/campaigns/${id}`, { method: "DELETE" }),
+    previewCampaign: (id) => request(`/campaigns/${id}/preview`, { method: "POST" }),
+    startCampaign: (id) => request(`/campaigns/${id}/start`, { method: "POST", body: JSON.stringify({ confirm: true }) }),
+    pauseCampaign: (id) => request(`/campaigns/${id}/pause`, { method: "POST" }),
+    resumeCampaign: (id) => request(`/campaigns/${id}/resume`, { method: "POST" }),
+    getCampaignLogs: (id) => request(`/campaigns/${id}/logs`),
+    uploadCampaignImage: async (id, file) => {
+      const form = new FormData();
+      form.append("file", file, file.name || "image.jpg");
+      const res = await fetch(`${BASE}/campaigns/${id}/image`, { method: "POST", body: form });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try { detail = (await res.json()).detail || detail; } catch (_) {}
+        throw new Error(detail);
+      }
+      return res.json();
+    },
+    removeCampaignImage: (id) => request(`/campaigns/${id}/image`, { method: "DELETE" }),
   };
 })();
 
