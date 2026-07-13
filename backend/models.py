@@ -10,7 +10,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, Float, ForeignKey, Table, Enum, func
+    Column, Integer, BigInteger, String, Text, DateTime, Float, ForeignKey, Table, Enum, func
 )
 from sqlalchemy.orm import relationship
 
@@ -70,7 +70,7 @@ class Contact(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(150), nullable=False, index=True)
     username = Column(String(100), nullable=True, index=True)
-    telegram_id = Column(Integer, nullable=True, unique=True, index=True)  # id из аккаунта Telegram, если контакт импортирован
+    telegram_id = Column(BigInteger, nullable=True, unique=True, index=True)  # id из аккаунта Telegram, если контакт импортирован (может превышать 2^31, поэтому BigInteger)
     photo_url = Column(String(500), nullable=True)
     source = Column(String(200), nullable=True)          # источник знакомства
     status = Column(Enum(ContactStatus), default=ContactStatus.NEW, nullable=False, index=True)

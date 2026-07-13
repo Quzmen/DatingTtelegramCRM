@@ -116,3 +116,17 @@ def run_migrations():
                         f"ALTER TABLE contacts ADD COLUMN {column_name} {ddl_type}"
                     )
                 )
+
+    # telegram_id раньше был INTEGER (лимит int4 — 2147483647), а
+    # реальные Telegram ID могут быть больше. SQLite это не касается
+    # (там нет строгого лимита на INTEGER), поэтому расширяем только
+    # PostgreSQL, и только если колонка ещё не BIGINT — иначе ALTER
+    # выполнялся бы при каждом старте приложения.
+    if engine.dialect.name == "postgresql":
+        telegram_id_column = next(
+            (c for c in inspector.get_columns("contacts") if c["name"] == "telegram_id"),
+            None,
+        )
+        if telegram_id_column is not None and str(telegram_id_column["type"]).upper() == "INTEGER":
+            with engine.begin() as conn:
+                conn.execute(sa.text("ALTER TABLE contacts ALTER COLUMN telegram_id TYPE BIGINT"))
