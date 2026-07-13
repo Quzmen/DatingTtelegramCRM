@@ -150,6 +150,40 @@ const API = (() => {
       return res.json();
     },
     removeCampaignImage: (id) => request(`/campaigns/${id}/image`, { method: "DELETE" }),
+    attachCampaignMedia: (id, mediaId) =>
+      request(`/campaigns/${id}/media`, { method: "POST", body: JSON.stringify({ media_id: mediaId }) }),
+
+    // media library (медиатека)
+    listMedia: (params = {}) => {
+      const qs = new URLSearchParams(
+        Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null))
+      ).toString();
+      return request(`/media${qs ? "?" + qs : ""}`);
+    },
+    uploadMedia: async (files) => {
+      const form = new FormData();
+      [...files].forEach((f) => form.append("files", f, f.name));
+      const res = await fetch(`${BASE}/media/upload`, { method: "POST", body: form });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try { detail = (await res.json()).detail || detail; } catch (_) {}
+        throw new Error(detail);
+      }
+      return res.json();
+    },
+    renameMedia: (id, name) => request(`/media/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+    deleteMedia: (id) => request(`/media/${id}`, { method: "DELETE" }),
+    mediaFileUrl: (id) => `/api/media/${id}/file`,
+    mediaThumbUrl: (id) => `/api/media/${id}/thumb`,
+    checkMediaUsage: (mediaId, telegramId) => request(`/media/${mediaId}/usage/${telegramId}`),
+    bulkCheckMediaUsage: (mediaId, telegramIds) =>
+      request(`/media/${mediaId}/usage/check`, { method: "POST", body: JSON.stringify({ telegram_ids: telegramIds }) }),
+    dialogMediaUsage: (telegramId, mediaIds) =>
+      request(`/media/usage-for-dialog`, { method: "POST", body: JSON.stringify({ telegram_id: telegramId, media_ids: mediaIds }) }),
+    tgSendMediaFile: (telegramId, mediaId, { caption = null, replyTo = null } = {}) =>
+      request(`/telegram/messages/${telegramId}/media/${mediaId}`, {
+        method: "POST", body: JSON.stringify({ caption, reply_to: replyTo }),
+      }),
   };
 })();
 

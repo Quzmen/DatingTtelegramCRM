@@ -497,11 +497,34 @@ class TelegramService:
 
     async def send_file(
         self, telegram_id: int, file_path: str, caption: Optional[str] = None,
-        reply_to: Optional[int] = None, voice_note: bool = False,
+        reply_to: Optional[int] = None, voice_note: bool = False, kind: Optional[str] = None,
     ) -> dict:
+        """Отправляет вложение корректным методом Telegram API в
+        зависимости от типа (раздел ОТПРАВКА ФОТО И ВИДЕО ТЗ):
+          - photo -> отправляется как Telegram Photo (сжатое превью,
+            открывается во весь экран одним тапом);
+          - video/gif -> отправляется как Telegram Video/анимация с
+            поддержкой потокового воспроизведения, а не как файл-документ;
+          - всё остальное -> обычный документ.
+
+        `kind` — необязательная подсказка ("photo"/"video"/"gif"/
+        "document"), обычно приходящая из медиатеки (см.
+        media_manager.classify_kind), которая знает тип файла точнее,
+        чем расширение само по себе. Если kind не передан, тип
+        определяется по расширению файла — так же ведёт себя и
+        media_manager, поэтому поведение одинаковое что для файлов из
+        галереи, что для вложений "на лету" (обычный чат, вставка из
+        буфера, кампании). Единая точка входа для ВСЕХ мест приложения,
+        отправляющих вложения — обычных чатов, быстрых сообщений,
+        кампаний и очереди отправки (раздел АРХИТЕКТУРА ТЗ)."""
         client = await self._get_client()
         if not await _with_timeout(client.is_user_authorized(), "проверка авторизации"):
             raise TelegramAuthError("Аккаунт не авторизован")
+
+        if kind is None and not voice_note:
+            from . import media_manager
+            kind = media_manager.classify_kind(Path(file_path).name).value
+
         kwargs = {}
         if caption:
             kwargs["caption"] = caption
@@ -509,6 +532,18 @@ class TelegramService:
             kwargs["reply_to"] = reply_to
         if voice_note:
             kwargs["voice_note"] = True
+        elif kind == "photo":
+            kwargs["force_document"] = False
+        elif kind == "video":
+            kwargs["force_document"] = False
+            kwargs["supports_streaming"] = True
+        elif kind == "gif":
+            from telethon.tl.types import DocumentAttributeAnimated
+            kwargs["force_document"] = False
+            kwargs["attributes"] = [DocumentAttributeAnimated()]
+        elif kind == "document":
+            kwargs["force_document"] = True
+
         try:
             msg = await _with_timeout(
                 client.send_file(telegram_id, file_path, **kwargs),

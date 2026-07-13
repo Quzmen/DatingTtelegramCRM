@@ -886,6 +886,28 @@ const ChatView = (() => {
     }
   }
 
+  async function sendMediaFromLibrary(media, opts = {}) {
+    if (!activeId) return;
+    try {
+      await API.tgSendMediaFile(activeId, media.id, opts);
+      await loadMessages({ silent: true });
+    } catch (err) {
+      Utils.toast(err.message || "Не удалось отправить файл");
+    }
+  }
+
+  function openGallery() {
+    if (!activeId) return;
+    MediaLibrary.open({
+      dialogId: activeId,
+      title: "Медиатека",
+      onSelect: (media) => {
+        sendMediaFromLibrary(media, { replyTo: replyTo ? replyTo.id : null });
+        replyTo = null; renderComposerBars();
+      },
+    });
+  }
+
   function autosize(el) {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
@@ -977,6 +999,7 @@ const ChatView = (() => {
     $("composerField").hidden = active;
     $("btnEmoji").hidden = active;
     $("btnAttach").hidden = active;
+    $("btnGallery").hidden = active;
     $("composerVoice").hidden = active;
     let bar = $("recordingBar");
     if (active) {
@@ -1069,6 +1092,7 @@ const ChatView = (() => {
     $("btnEmoji").addEventListener("click", (e) => { e.stopPropagation(); toggleEmojiPicker(); });
 
     $("btnAttach").addEventListener("click", () => $("fileAttachInput").click());
+    $("btnGallery").addEventListener("click", () => openGallery());
     $("fileAttachInput").addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;

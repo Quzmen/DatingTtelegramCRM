@@ -65,6 +65,10 @@
 .campaign-var-btn:hover{ background: var(--primary-tint); border-color: var(--primary); }
 
 .campaign-image-status{ font-size:12px; color: var(--ink-faint); margin-top:-8px; }
+.campaign-image-row{ display:flex; align-items:center; gap:8px; margin-top:-6px; }
+.campaign-media-usage{ margin: 4px 0 8px; }
+.campaign-media-usage summary{ cursor:pointer; font-size:12.5px; font-weight:700; color: var(--ink-soft); }
+.campaign-media-usage table{ margin-top:8px; }
 
 .campaign-filters{ border:1px solid var(--border); border-radius: var(--radius-sm); padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
 .campaign-filters legend{ font-size:11px; font-weight:700; color: var(--ink-faint); padding:0 4px; }

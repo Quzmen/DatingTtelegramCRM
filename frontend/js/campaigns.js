@@ -15,6 +15,8 @@ const Campaigns = (() => {
   let folders = [];
   let statuses = [];
   let tags = [];
+  let campSelectedMedia = null; // {id, original_name, kind} — выбранное в медиатеке вложение для формы черновика
+  let campHasLegacyImage = false; // вложение осталось от кампаний, созданных до появления медиатеки (только image_path, без media)
 
   const STATUS_LABELS = {
     draft: "Черновик",
@@ -164,9 +166,13 @@ const Campaigns = (() => {
               <button type="button" class="campaign-var-btn" data-var="first_name">{first_name}</button>
             </div>
 
-            <label>Изображение (необязательно)
-              <input type="file" id="campImageInput" accept="image/*">
+            <label>Изображение / видео (необязательно)
+              <input type="file" id="campImageInput" accept="image/*,video/*">
             </label>
+            <div class="campaign-image-row">
+              <button type="button" class="btn" id="campPickMediaBtn">🖼 Выбрать из медиатеки</button>
+              <button type="button" class="btn btn--icon" id="campClearMediaBtn" title="Убрать вложение" hidden>✕</button>
+            </div>
             <div id="campImageStatus" class="campaign-image-status"></div>
 
             <fieldset class="campaign-filters">
@@ -201,6 +207,22 @@ const Campaigns = (() => {
     document.body.querySelectorAll(".campaign-var-btn").forEach(() => {}); // делегирование ниже, в openEditModal
   }
 
+  function renderImageStatus() {
+    const status = $("campImageStatus");
+    const clearBtn = $("campClearMediaBtn");
+    if (campSelectedMedia) {
+      const kindLabel = { photo: "фото", video: "видео", gif: "GIF", document: "документ" }[campSelectedMedia.kind] || campSelectedMedia.kind;
+      status.textContent = `Вложение: ${campSelectedMedia.original_name} (${kindLabel})`;
+      clearBtn.hidden = false;
+    } else if (campHasLegacyImage) {
+      status.textContent = "Вложение прикреплено";
+      clearBtn.hidden = false;
+    } else {
+      status.textContent = "";
+      clearBtn.hidden = true;
+    }
+  }
+
   async function openEditModal(campaign) {
     ensureEditModal();
     await ensureFilterOptions();
@@ -232,8 +254,33 @@ const Campaigns = (() => {
     const selectedTagIds = new Set(filters.tag_ids || []);
     tagSelect.innerHTML = tags.map((t) => `<option value="${t.id}" ${selectedTagIds.has(t.id) ? "selected" : ""}>${Utils.escapeHtml(t.name)}</option>`).join("");
 
-    $("campImageStatus").textContent = campaign && campaign.has_image ? "Изображение прикреплено" : "";
+    campSelectedMedia = campaign && campaign.media ? campaign.media : null;
+    campHasLegacyImage = !!(campaign && campaign.has_image && !campaign.media);
     $("campImageInput").value = "";
+    renderImageStatus();
+
+    $("campPickMediaBtn").onclick = () => {
+      MediaLibrary.open({
+        title: "Выбрать вложение кампании",
+        onSelect: (media) => {
+          campSelectedMedia = media;
+          $("campImageInput").value = "";
+          renderImageStatus();
+        },
+      });
+    };
+    $("campClearMediaBtn").onclick = async () => {
+      campSelectedMedia = null;
+      campHasLegacyImage = false;
+      $("campImageInput").value = "";
+      renderImageStatus();
+      if (campaign && (campaign.media_id || campaign.has_image)) {
+        try { await API.removeCampaignImage(campaign.id); } catch (err) { Utils.toast(err.message || "Не удалось убрать вложение"); }
+      }
+    };
+    $("campImageInput").addEventListener("change", () => {
+      if ($("campImageInput").files[0]) { campSelectedMedia = null; renderImageStatus(); }
+    });
 
     // делегирование клика по кнопкам переменных — вставляем в текстовое поле
     modal.querySelectorAll(".campaign-var-btn").forEach((btn) => {
@@ -271,7 +318,11 @@ const Campaigns = (() => {
         else saved = await API.createCampaign(payload);
 
         const file = $("campImageInput").files[0];
-        if (file) await API.uploadCampaignImage(saved.id, file);
+        if (file) {
+          await API.uploadCampaignImage(saved.id, file);
+        } else if (campSelectedMedia) {
+          await API.attachCampaignMedia(saved.id, campSelectedMedia.id);
+        }
 
         modal.hidden = true;
         await render();
@@ -333,12 +384,36 @@ const Campaigns = (() => {
     }
     const reasons = Object.entries(preview.excluded_reasons)
       .map(([k, v]) => `<li>${EXCLUDE_REASON_LABELS[k] || k}: ${v}</li>`).join("");
+    let mediaUsageHtml = "";
+    if (preview.media) {
+      const sentCount = preview.media_usage.filter((u) => u.sent).length;
+      const rows = preview.media_usage.slice(0, 30).map((u) => `
+        <tr>
+          <td>${u.telegram_id}</td>
+          <td>${u.sent ? "✔ Уже отправлялось" : "Никогда не отправлялось"}</td>
+          <td>${u.last_sent_at ? new Date(u.last_sent_at).toLocaleString("ru-RU") : "—"}</td>
+        </tr>`).join("");
+      mediaUsageHtml = `
+        <p><b>Вложение:</b> ${Utils.escapeHtml(preview.media.original_name)}</p>
+        <p><b>Уже получали это вложение:</b> ${sentCount} из ${preview.media_usage.length}</p>
+        ${preview.media_usage.length ? `
+          <details class="campaign-media-usage">
+            <summary>История по получателям (${preview.media_usage.length})</summary>
+            <table class="campaign-log-table">
+              <thead><tr><th>Получатель</th><th>Статус</th><th>Последняя отправка</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+            ${preview.media_usage.length > 30 ? `<p class="view__sub">Показаны первые 30</p>` : ""}
+          </details>` : ""}
+      `;
+    }
     body.innerHTML = `
       <p><b>Сегментов выбрано:</b> ${preview.folder_ids.length}</p>
       <p><b>Диалогов в сегментах:</b> ${preview.total_dialogs_in_segments}</p>
       <p><b>Пройдёт фильтры:</b> ${preview.total_after_filters}</p>
       <p><b>Исключено:</b> ${preview.excluded_count}${reasons ? `<ul>${reasons}</ul>` : ""}</p>
       <p><b>Изображение:</b> ${preview.has_image ? "есть" : "нет"}</p>
+      ${mediaUsageHtml}
       <p><b>Текст:</b></p>
       <pre class="campaign-preview-text">${Utils.escapeHtml(preview.message_text || "")}</pre>
       ${preview.total_after_filters === 0 ? `<p class="view__sub">После фильтрации получателей не осталось — запуск невозможен.</p>` : ""}

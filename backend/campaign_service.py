@@ -19,7 +19,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from . import crud, models
+from . import crud, models, media_manager
 from .database import SessionLocal
 from .telegram_service import telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
 
@@ -68,8 +68,17 @@ async def run_campaign(campaign_id: int) -> None:
             try:
                 variables = await telegram_service.get_entity_vars(telegram_id)
                 text = render_template(campaign.message_text, variables)
-                if campaign.image_path:
-                    await telegram_service.send_file(telegram_id, campaign.image_path, caption=text)
+                if campaign.media_id and campaign.media:
+                    path = media_manager.file_path(campaign.media.stored_name)
+                    await telegram_service.send_file(
+                        telegram_id, str(path), caption=text, kind=campaign.media.kind.value,
+                    )
+                    crud.record_media_usage(db, campaign.media_id, telegram_id, context="campaign")
+                elif campaign.image_path:
+                    # Вложения, загруженные до появления медиатеки — отправляем
+                    # как раньше, определяя фото/видео по расширению файла.
+                    kind = media_manager.classify_kind(campaign.image_path).value
+                    await telegram_service.send_file(telegram_id, campaign.image_path, caption=text, kind=kind)
                 else:
                     await telegram_service.send_message(telegram_id, text)
                 campaign.completed_count += 1

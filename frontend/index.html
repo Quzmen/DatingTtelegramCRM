@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/css/style.css">
 <link rel="stylesheet" href="/css/chatview.css">
 <link rel="stylesheet" href="/css/campaigns.css">
+<link rel="stylesheet" href="/css/medialibrary.css">
 </head>
 <body>
 
@@ -120,6 +121,9 @@
           </button>
           <button type="button" class="composer__btn" id="btnAttach" title="Прикрепить файл">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5 12.4 19a4.5 4.5 0 0 1-6.4-6.4l7.6-7.5a3 3 0 0 1 4.3 4.2L10.3 17a1.5 1.5 0 0 1-2.2-2.1l6.8-6.8"/></svg>
+          </button>
+          <button type="button" class="composer__btn composer__btn--gallery" id="btnGallery" title="Медиатека">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6" fill="currentColor" stroke="none"/><path d="M5 17l4.5-5 3.5 3.8 2.5-2.8L20 17"/></svg>
           </button>
           <div class="composer__field" id="composerField">
             <textarea id="composerText" placeholder="Написать сообщение…" rows="1"></textarea>
@@ -338,6 +342,7 @@
 <script src="/js/api.js"></script>
 <script src="/js/cache.js"></script>
 <script src="/js/media.js"></script>
+<script src="/js/medialibrary.js"></script>
 <script src="/js/chatview.js"></script>
 <script src="/js/folders.js"></script>
 <script src="/js/dashboard.js"></script>

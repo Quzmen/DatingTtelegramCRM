@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 import json
 from typing import Optional, List
 
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session, joinedload
 
-from . import models, schemas
+from . import models, schemas, media_manager
 
 ATTENTION_THRESHOLD_DAYS = 7
 
@@ -616,14 +616,176 @@ def mark_outbox_read(db: Session, dialog_telegram_id: int, max_id: int) -> None:
 
 
 # ---------------------------------------------------------------
+# Медиатека (см. МОДУЛЬ МЕДИАТЕКИ / АРХИТЕКТУРА ТЗ)
+#
+# Файловая система и классификация — в media_manager.py, здесь только
+# сама таблица media_files/media_usages, как и для остальных сущностей
+# приложения.
+# ---------------------------------------------------------------
+
+def media_file_out(m: models.MediaFile) -> schemas.MediaFileOut:
+    out = schemas.MediaFileOut.model_validate(m)
+    out.url = f"/api/media/{m.id}/file"
+    out.thumb_url = f"/api/media/{m.id}/thumb" if m.has_thumb else ""
+    return out
+
+
+def create_media_file(db: Session, contents: bytes, filename: str, mime: Optional[str] = None) -> schemas.MediaFileOut:
+    fields = media_manager.store_upload(contents, filename, mime)
+    row = models.MediaFile(**fields)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return media_file_out(row)
+
+
+_MEDIA_SORTS = {
+    "date_desc": models.MediaFile.created_at.desc(),
+    "date_asc": models.MediaFile.created_at.asc(),
+    "name_asc": models.MediaFile.original_name.asc(),
+    "name_desc": models.MediaFile.original_name.desc(),
+    "size_desc": models.MediaFile.size_bytes.desc(),
+    "size_asc": models.MediaFile.size_bytes.asc(),
+}
+
+
+def list_media_files(
+    db: Session, search: Optional[str] = None, kind: Optional[str] = None, sort: str = "date_desc",
+) -> schemas.MediaListOut:
+    query = db.query(models.MediaFile)
+    if search:
+        query = query.filter(models.MediaFile.original_name.ilike(f"%{search}%"))
+    if kind:
+        query = query.filter(models.MediaFile.kind == kind)
+    query = query.order_by(_MEDIA_SORTS.get(sort, _MEDIA_SORTS["date_desc"]))
+    rows = query.all()
+
+    # Общий объём хранилища и число файлов считаем по ВСЕЙ медиатеке
+    # (без учёта поиска/фильтра) — это раздел ИНТЕРФЕЙС ТЗ, "отображение
+    # количества файлов" и "общего объёма хранилища" описывают состояние
+    # галереи целиком, а не текущей выборки.
+    total_count = db.query(models.MediaFile).count()
+    total_size = db.query(func.coalesce(func.sum(models.MediaFile.size_bytes), 0)).scalar() or 0
+
+    return schemas.MediaListOut(
+        items=[media_file_out(r) for r in rows],
+        total_count=total_count,
+        total_size_bytes=int(total_size),
+    )
+
+
+def get_media_file(db: Session, media_id: int) -> Optional[models.MediaFile]:
+    return db.query(models.MediaFile).filter(models.MediaFile.id == media_id).first()
+
+
+def rename_media_file(db: Session, media: models.MediaFile, new_name: str) -> schemas.MediaFileOut:
+    media.original_name = new_name.strip() or media.original_name
+    db.commit()
+    db.refresh(media)
+    return media_file_out(media)
+
+
+def delete_media_file(db: Session, media: models.MediaFile) -> None:
+    stored_name = media.stored_name
+    # Кампании, ссылающиеся на этот файл, теряют вложение, но не
+    # ломаются (media_id проставится в NULL) — соответствует ondelete=SET
+    # NULL на уровне модели, но делаем явно и для SQLite, где внешние
+    # ключи по умолчанию не форсируют такое поведение.
+    db.query(models.Campaign).filter(models.Campaign.media_id == media.id).update({"media_id": None})
+    db.delete(media)
+    db.commit()
+    media_manager.delete_files(stored_name)
+
+
+def record_media_usage(db: Session, media_id: int, telegram_id: int, context: str = "chat") -> None:
+    usage = models.MediaUsage(media_id=media_id, telegram_id=telegram_id, context=context)
+    db.add(usage)
+    db.query(models.MediaFile).filter(models.MediaFile.id == media_id).update(
+        {"send_count": models.MediaFile.send_count + 1}
+    )
+    db.commit()
+
+
+def media_usage_status(db: Session, media_id: int, telegram_id: int) -> schemas.MediaUsageStatusOut:
+    usages = (
+        db.query(models.MediaUsage)
+        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.telegram_id == telegram_id)
+        .order_by(models.MediaUsage.sent_at.desc())
+        .all()
+    )
+    return schemas.MediaUsageStatusOut(
+        telegram_id=telegram_id,
+        sent=bool(usages),
+        send_count=len(usages),
+        last_sent_at=usages[0].sent_at if usages else None,
+    )
+
+
+def media_usage_bulk_check(db: Session, media_id: int, telegram_ids: List[int]) -> List[schemas.MediaUsageStatusOut]:
+    """Раздел ПРОВЕРКА ПРИ КАМПАНИЯХ: для каждого получателя из списка —
+    отправлялся ли уже этот файл и когда в последний раз. Один запрос
+    на всех получателей вместо N, чтобы предпросмотр кампании с
+    сотнями получателей не тормозил."""
+    rows = (
+        db.query(models.MediaUsage)
+        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.telegram_id.in_(telegram_ids))
+        .order_by(models.MediaUsage.sent_at.desc())
+        .all()
+    )
+    by_telegram_id: dict[int, list] = {}
+    for row in rows:
+        by_telegram_id.setdefault(row.telegram_id, []).append(row)
+
+    out = []
+    for telegram_id in telegram_ids:
+        entries = by_telegram_id.get(telegram_id, [])
+        out.append(schemas.MediaUsageStatusOut(
+            telegram_id=telegram_id,
+            sent=bool(entries),
+            send_count=len(entries),
+            last_sent_at=entries[0].sent_at if entries else None,
+        ))
+    return out
+
+
+def dialog_media_usage(db: Session, telegram_id: int, media_ids: List[int]) -> List[schemas.MediaDialogUsageOut]:
+    """Обратная сторона media_usage_bulk_check: один диалог, много
+    файлов — используется галереей внутри чата (раздел ПРОВЕРКА В
+    ЧАТЕ ТЗ), чтобы одним запросом отметить "Уже отправлялось" сразу
+    на всех миниатюрах текущей страницы галереи."""
+    rows = (
+        db.query(models.MediaUsage)
+        .filter(models.MediaUsage.telegram_id == telegram_id, models.MediaUsage.media_id.in_(media_ids))
+        .order_by(models.MediaUsage.sent_at.desc())
+        .all()
+    )
+    by_media_id: dict[int, list] = {}
+    for row in rows:
+        by_media_id.setdefault(row.media_id, []).append(row)
+
+    out = []
+    for media_id in media_ids:
+        entries = by_media_id.get(media_id, [])
+        out.append(schemas.MediaDialogUsageOut(
+            media_id=media_id,
+            sent=bool(entries),
+            send_count=len(entries),
+            last_sent_at=entries[0].sent_at if entries else None,
+        ))
+    return out
+
+
+# ---------------------------------------------------------------
 # Кампании массовых рассылок
 # ---------------------------------------------------------------
 
 def campaign_out(campaign: models.Campaign) -> schemas.CampaignOut:
     out = schemas.CampaignOut.model_validate(campaign)
-    out.has_image = bool(campaign.image_path)
+    out.has_image = bool(campaign.image_path or campaign.media_id)
     out.folder_ids = campaign.folder_ids
     out.filters = schemas.CampaignFiltersIn(**campaign.filters) if campaign.filters else schemas.CampaignFiltersIn()
+    if campaign.media:
+        out.media = media_file_out(campaign.media)
     return out
 
 
@@ -670,6 +832,27 @@ def update_campaign(db: Session, campaign: models.Campaign, data: schemas.Campai
             if campaign.message_text.strip() and campaign.folder_ids
             else models.CampaignStatus.DRAFT
         )
+    db.commit()
+    db.refresh(campaign)
+    return campaign_out(campaign)
+
+
+def attach_campaign_media(db: Session, campaign: models.Campaign, media_id: int) -> schemas.CampaignOut:
+    # Кампания хранит одно вложение за раз — если раньше был загружен
+    # файл по старой (до медиатеки) схеме, снимаем его, чтобы не
+    # уйти дублем в самой рассылке (см. campaign_service.run_campaign).
+    if campaign.image_path:
+        from pathlib import Path as _Path
+        _Path(campaign.image_path).unlink(missing_ok=True)
+        campaign.image_path = None
+    campaign.media_id = media_id
+    db.commit()
+    db.refresh(campaign)
+    return campaign_out(campaign)
+
+
+def detach_campaign_media(db: Session, campaign: models.Campaign) -> schemas.CampaignOut:
+    campaign.media_id = None
     db.commit()
     db.refresh(campaign)
     return campaign_out(campaign)

@@ -86,6 +86,15 @@ MEDIA_DIR.mkdir(exist_ok=True)
 UPLOAD_TMP_DIR = DATA_DIR / "upload_tmp"
 UPLOAD_TMP_DIR.mkdir(exist_ok=True)
 
+# Встроенная медиатека (см. media_manager.py) — отдельная от MEDIA_DIR
+# (который является кэшем СКАЧАННЫХ из Telegram вложений). Здесь лежат
+# файлы, которые пользователь сам загрузил в CRM для повторного
+# использования в чатах и кампаниях.
+MEDIA_LIBRARY_DIR = DATA_DIR / "media_library"
+MEDIA_LIBRARY_DIR.mkdir(exist_ok=True)
+MEDIA_LIBRARY_THUMB_DIR = MEDIA_LIBRARY_DIR / "thumbs"
+MEDIA_LIBRARY_THUMB_DIR.mkdir(exist_ok=True)
+
 # Через сколько секунд без нового события "печатает" считаем, что
 # собеседник перестал печатать (Telegram не присылает явного события
 # окончания набора текста, только повторяющиеся события во время ввода).

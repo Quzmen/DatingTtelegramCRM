@@ -8,7 +8,7 @@ from typing import Optional, List
 
 from pydantic import BaseModel, Field, ConfigDict
 
-from .models import ContactStatus, CampaignStatus
+from .models import ContactStatus, CampaignStatus, MediaKind
 
 
 # ---------- Tags ----------
@@ -388,6 +388,71 @@ class TelegramPresenceOut(BaseModel):
     typing: bool = False
 
 
+# ---------- Медиатека (см. МОДУЛЬ МЕДИАТЕКИ ТЗ) ----------
+
+class MediaFileOut(BaseModel):
+    id: int
+    original_name: str
+    kind: MediaKind
+    mime: Optional[str] = None
+    size_bytes: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    has_thumb: bool = False
+    send_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    url: str = ""        # заполняется в crud.media_file_out — прямая ссылка на файл
+    thumb_url: str = ""  # заполняется в crud.media_file_out — ссылка на превью (пусто, если превью нет)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MediaListOut(BaseModel):
+    items: List[MediaFileOut]
+    total_count: int
+    total_size_bytes: int
+
+
+class MediaRenameIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=300)
+
+
+class MediaUsageStatusOut(BaseModel):
+    """Ответ на "уже отправлялось этому получателю?" — и для одного
+    диалога в чате (раздел ПРОВЕРКА В ЧАТЕ), и построчно для
+    получателей кампании (раздел ПРОВЕРКА ПРИ КАМПАНИЯХ)."""
+    telegram_id: int
+    sent: bool
+    send_count: int = 0
+    last_sent_at: Optional[datetime] = None
+
+
+class MediaUsageBulkCheckIn(BaseModel):
+    telegram_ids: List[int] = Field(..., min_length=1)
+
+
+class MediaDialogUsageOut(BaseModel):
+    """Обратная форма MediaUsageStatusOut: один диалог, много файлов —
+    нужна галерее в чате, чтобы отметить "Уже отправлялось" сразу на
+    всех миниатюрах, а не делать по запросу на каждую (раздел
+    ПРОВЕРКА В ЧАТЕ ТЗ)."""
+    media_id: int
+    sent: bool
+    send_count: int = 0
+    last_sent_at: Optional[datetime] = None
+
+
+class MediaDialogUsageCheckIn(BaseModel):
+    telegram_id: int
+    media_ids: List[int] = Field(..., min_length=1)
+
+
+class MediaSendIn(BaseModel):
+    caption: Optional[str] = None
+    reply_to: Optional[int] = None
+
+
 # ---------- Кампании массовых рассылок ----------
 
 class CampaignFiltersIn(BaseModel):
@@ -425,6 +490,8 @@ class CampaignPreviewOut(BaseModel):
     applied_filters: CampaignFiltersIn
     message_text: str
     has_image: bool
+    media: Optional[MediaFileOut] = None
+    media_usage: List[MediaUsageStatusOut] = Field(default_factory=list)  # раздел ПРОВЕРКА ПРИ КАМПАНИЯХ — по каждому получателю
 
 
 class CampaignOut(BaseModel):
@@ -433,6 +500,8 @@ class CampaignOut(BaseModel):
     status: CampaignStatus
     message_text: str
     has_image: bool = False
+    media_id: Optional[int] = None
+    media: Optional[MediaFileOut] = None
     folder_ids: List[int] = Field(default_factory=list)
     filters: CampaignFiltersIn = Field(default_factory=CampaignFiltersIn)
 
@@ -447,6 +516,10 @@ class CampaignOut(BaseModel):
     finished_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CampaignMediaAttachIn(BaseModel):
+    media_id: int
 
 
 class CampaignStartIn(BaseModel):

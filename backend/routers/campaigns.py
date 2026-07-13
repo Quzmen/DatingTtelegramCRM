@@ -55,29 +55,33 @@ def delete_campaign(campaign_id: int, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------
-# Вложение (изображение) — хранится, пока кампания не удалена или
-# картинка не заменена/убрана, в отличие от одноразовых вложений
-# обычных сообщений (routers/telegram.send_file), которые удаляются
-# сразу после отправки.
+# Вложение — теперь всегда через единую медиатеку (см. МОДУЛЬ
+# МЕДИАТЕКИ / ГАЛЕРЕЯ В КАМПАНИЯХ ТЗ: "Не создавать отдельную галерею
+# для рассылок. Использовать единый интерфейс медиатеки во всей CRM").
+# Прямая загрузка файла ниже тоже сохраняет его в медиатеку (а не
+# только в саму кампанию), чтобы он сразу стал доступен для повторного
+# использования — ровно так же, как выбор уже существующего файла.
 # ---------------------------------------------------------------
+
+@router.post("/{campaign_id}/media", response_model=schemas.CampaignOut)
+def attach_campaign_media(campaign_id: int, data: schemas.CampaignMediaAttachIn, db: Session = Depends(get_db)):
+    campaign = _get_or_404(db, campaign_id)
+    if campaign.status not in _EDITABLE_STATUSES:
+        raise HTTPException(status_code=409, detail="Кампанию можно менять только в статусе черновика")
+    media = crud.get_media_file(db, data.media_id)
+    if media is None:
+        raise HTTPException(status_code=404, detail="Файл не найден в медиатеке")
+    return crud.attach_campaign_media(db, campaign, media.id)
+
 
 @router.post("/{campaign_id}/image", response_model=schemas.CampaignOut)
 async def upload_campaign_image(campaign_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     campaign = _get_or_404(db, campaign_id)
     if campaign.status not in _EDITABLE_STATUSES:
         raise HTTPException(status_code=409, detail="Кампанию можно менять только в статусе черновика")
-    from pathlib import Path as _Path
-    safe_name = _Path(file.filename or "image").name
-    dest = config.MEDIA_DIR / f"campaign_{campaign_id}_{safe_name}"
     contents = await file.read()
-    dest.write_bytes(contents)
-    if campaign.image_path and campaign.image_path != str(dest):
-        from pathlib import Path
-        Path(campaign.image_path).unlink(missing_ok=True)
-    campaign.image_path = str(dest)
-    db.commit()
-    db.refresh(campaign)
-    return crud.campaign_out(campaign)
+    media = crud.create_media_file(db, contents, file.filename or "image", file.content_type)
+    return crud.attach_campaign_media(db, campaign, media.id)
 
 
 @router.delete("/{campaign_id}/image", response_model=schemas.CampaignOut)
@@ -89,6 +93,8 @@ def remove_campaign_image(campaign_id: int, db: Session = Depends(get_db)):
         campaign.image_path = None
         db.commit()
         db.refresh(campaign)
+    if campaign.media_id:
+        return crud.detach_campaign_media(db, campaign)
     return crud.campaign_out(campaign)
 
 
@@ -102,6 +108,8 @@ def preview_campaign(campaign_id: int, db: Session = Depends(get_db)):
     folder_ids = campaign.folder_ids
     filters = schemas.CampaignFiltersIn(**campaign.filters) if campaign.filters else schemas.CampaignFiltersIn()
     recipients, total_in_segments, excluded_reasons = crud.resolve_campaign_recipients(db, folder_ids, filters)
+    media_out = crud.media_file_out(campaign.media) if campaign.media else None
+    media_usage = crud.media_usage_bulk_check(db, campaign.media_id, recipients) if campaign.media_id and recipients else []
     return schemas.CampaignPreviewOut(
         folder_ids=folder_ids,
         total_dialogs_in_segments=total_in_segments,
@@ -110,7 +118,9 @@ def preview_campaign(campaign_id: int, db: Session = Depends(get_db)):
         excluded_reasons=excluded_reasons,
         applied_filters=filters,
         message_text=campaign.message_text,
-        has_image=bool(campaign.image_path),
+        has_image=bool(campaign.image_path or campaign.media_id),
+        media=media_out,
+        media_usage=media_usage,
     )
 
 

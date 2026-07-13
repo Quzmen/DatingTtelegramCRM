@@ -284,7 +284,10 @@ class Campaign(Base):
     status = Column(Enum(CampaignStatus), default=CampaignStatus.DRAFT, nullable=False, index=True)
 
     message_text = Column(Text, nullable=False, default="")
-    image_path = Column(String(500), nullable=True)  # локальный путь к сохранённому вложению кампании
+    image_path = Column(String(500), nullable=True)  # legacy: путь к вложению, загруженному до появления медиатеки
+    media_id = Column(Integer, ForeignKey("media_files.id", ondelete="SET NULL"), nullable=True, index=True)  # вложение кампании из единой медиатеки
+
+    media = relationship("MediaFile")
 
     folder_ids_json = Column(Text, nullable=True)     # выбранные сегменты: JSON-массив id папок
     filters_json = Column(Text, nullable=True)        # применённые фильтры получателей: JSON-объект
@@ -334,6 +337,59 @@ class CampaignLog(Base):
     error_text = Column(Text, nullable=True)
 
     campaign = relationship("Campaign", back_populates="logs")
+
+
+class MediaKind(str, enum.Enum):
+    PHOTO = "photo"
+    VIDEO = "video"
+    GIF = "gif"
+    DOCUMENT = "document"
+
+
+class MediaFile(Base):
+    """Единый склад медиафайлов CRM (модуль медиатеки) — одно место
+    хранения фото/видео/GIF/документов, переиспользуемых в обычных
+    чатах, быстрых сообщениях и кампаниях. Все части CRM работают с
+    этой таблицей только через media_manager.MediaManager, чтобы не
+    плодить несколько независимых реализаций отправки/хранения медиа."""
+    __tablename__ = "media_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    original_name = Column(String(300), nullable=False)   # как назывался файл при загрузке / текущее отображаемое имя
+    stored_name = Column(String(300), nullable=False, unique=True)  # реальное имя файла на диске (уникальное, коллизии исключены)
+    kind = Column(Enum(MediaKind), nullable=False, default=MediaKind.DOCUMENT, index=True)
+    mime = Column(String(120), nullable=True)
+    size_bytes = Column(Integer, nullable=False, default=0)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    has_thumb = Column(Boolean, nullable=False, default=False)
+
+    send_count = Column(Integer, nullable=False, default=0)   # сколько раз файл был отправлен всего (по всем диалогам)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    usages = relationship(
+        "MediaUsage", back_populates="media", cascade="all, delete-orphan",
+        order_by="desc(MediaUsage.sent_at)",
+    )
+
+
+class MediaUsage(Base):
+    """История использования медиафайла: одна строка на каждую отправку
+    в конкретный диалог (может повторяться для одного и того же
+    telegram_id, если файл отправлялся ему несколько раз) — на этом
+    строится и отметка "Уже отправлялось" в чате, и проверка перед
+    запуском кампании."""
+    __tablename__ = "media_usages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    media_id = Column(Integer, ForeignKey("media_files.id", ondelete="CASCADE"), nullable=False, index=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    context = Column(String(20), nullable=False, default="chat")   # chat | campaign — откуда была отправка
+
+    media = relationship("MediaFile", back_populates="usages")
 
 
 def _json_load_list(raw):

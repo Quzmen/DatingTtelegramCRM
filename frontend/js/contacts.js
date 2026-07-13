@@ -630,6 +630,9 @@ const Contacts = (() => {
           <button type="button" class="composer__btn" id="ccBtnAttach" title="Прикрепить файл">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5 12.4 19a4.5 4.5 0 0 1-6.4-6.4l7.6-7.5a3 3 0 0 1 4.3 4.2L10.3 17a1.5 1.5 0 0 1-2.2-2.1l6.8-6.8"/></svg>
           </button>
+          <button type="button" class="composer__btn composer__btn--gallery" id="ccBtnGallery" title="Медиатека">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6" fill="currentColor" stroke="none"/><path d="M5 17l4.5-5 3.5 3.8 2.5-2.8L20 17"/></svg>
+          </button>
           <div class="composer__field" id="ccComposerField">
             <textarea id="chatText" placeholder="Написать сообщение…" rows="1"></textarea>
           </div>
@@ -890,6 +893,22 @@ const Contacts = (() => {
       }
     });
 
+    // ---- медиатека (та же галерея, что и в разделе «Чат») ----
+    document.getElementById("ccBtnGallery").addEventListener("click", () => {
+      MediaLibrary.open({
+        dialogId: c.telegram_id,
+        title: "Медиатека",
+        onSelect: async (media) => {
+          try {
+            await API.tgSendMediaFile(c.telegram_id, media.id, {});
+            await loadAndRenderMessages(c, { silent: true });
+          } catch (err) {
+            Utils.toast(err.message || "Не удалось отправить файл");
+          }
+        },
+      });
+    });
+
     // ---- voice recording ----
     let micHeld = false;
     document.getElementById("ccComposerSend").addEventListener("click", (e) => {
@@ -952,6 +971,7 @@ const Contacts = (() => {
     document.getElementById("ccComposerField").hidden = active;
     document.getElementById("ccBtnEmoji").hidden = active;
     document.getElementById("ccBtnAttach").hidden = active;
+    document.getElementById("ccBtnGallery").hidden = active;
     let bar = document.getElementById("ccRecordingBar");
     if (active) {
       if (!bar) {

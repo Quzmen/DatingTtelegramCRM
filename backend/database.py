@@ -139,3 +139,12 @@ def run_migrations():
         if "folder_id" not in dialog_columns:
             with engine.begin() as conn:
                 conn.execute(sa.text("ALTER TABLE dialogs ADD COLUMN folder_id INTEGER"))
+
+    # Медиатека (см. models.MediaFile/MediaUsage) — сами таблицы новые
+    # и создаются через create_all, а вот campaigns.media_id нужно
+    # долить существующим базам, как и остальные колонки выше.
+    if "campaigns" in inspector.get_table_names():
+        campaign_columns = {c["name"] for c in inspector.get_columns("campaigns")}
+        if "media_id" not in campaign_columns:
+            with engine.begin() as conn:
+                conn.execute(sa.text("ALTER TABLE campaigns ADD COLUMN media_id INTEGER"))

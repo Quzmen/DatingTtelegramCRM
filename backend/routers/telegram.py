@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFi
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from .. import crud, schemas, models, config
+from .. import crud, schemas, models, config, media_manager
 from ..database import get_db
 from ..telegram_service import telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
 
@@ -182,8 +182,9 @@ async def send_file(
     try:
         contents = await file.read()
         tmp_path.write_bytes(contents)
+        kind = None if voice else media_manager.classify_kind(file.filename or "", file.content_type).value
         result = await telegram_service.send_file(
-            telegram_id, str(tmp_path), caption=caption, reply_to=reply_to, voice_note=voice,
+            telegram_id, str(tmp_path), caption=caption, reply_to=reply_to, voice_note=voice, kind=kind,
         )
         return result
     except TelegramAuthError as e:
@@ -191,6 +192,32 @@ async def send_file(
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/messages/{telegram_id}/media/{media_id}", response_model=schemas.TelegramMessageOut)
+async def send_media_from_library(
+    telegram_id: int, media_id: int, data: schemas.MediaSendIn, db: Session = Depends(get_db),
+):
+    """Отправка файла из встроенной медиатеки в диалог (раздел
+    ГАЛЕРЕЯ В ЧАТЕ ТЗ) — используется и обычным чатом, и быстрыми
+    сообщениями. Всегда через тот же telegram_service.send_file, что и
+    /messages/{telegram_id}/file, поэтому фото/видео и здесь уходят
+    корректным методом API, а не как файл. После успешной отправки
+    сразу пишет в историю использования (раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ)."""
+    media = crud.get_media_file(db, media_id)
+    if media is None:
+        raise HTTPException(status_code=404, detail="Файл не найден в медиатеке")
+    path = media_manager.file_path(media.stored_name)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл отсутствует на диске")
+    try:
+        result = await telegram_service.send_file(
+            telegram_id, str(path), caption=data.caption, reply_to=data.reply_to, kind=media.kind.value,
+        )
+    except TelegramAuthError as e:
+        _err(e)
+    crud.record_media_usage(db, media_id, telegram_id, context="chat")
+    return result
 
 
 @router.patch("/messages/{telegram_id}/{message_id}", response_model=schemas.TelegramMessageOut)
