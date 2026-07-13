@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from telethon.errors import AuthKeyUnregisteredError
+from telethon.errors import AuthKeyUnregisteredError, FloodWaitError
 
 from . import models
 from .database import engine, run_migrations, SessionLocal
@@ -69,6 +69,29 @@ async def _sync_telegram_on_startup() -> None:
         logger.exception("Не удалось восстановить незавершённые кампании при старте")
     finally:
         db.close()
+
+
+@app.exception_handler(FloodWaitError)
+async def _handle_flood_wait(request: Request, exc: FloodWaitError):
+    """Telegram сам просит подождать exc.seconds секунд, прежде чем
+    делать этот же запрос повторно (обычно всплывает на эндпоинтах,
+    которые опрашиваются с фронтенда каждые несколько секунд —
+    /telegram/dialogs, /telegram/messages/{id}, /telegram/presence/{id}).
+    Раньше это долетало до общего unhandled_exception_handler как 500
+    без какой-либо информации о паузе, а фронтенд как ни в чём не
+    бывало продолжал опрашивать тот же эндпоинт на следующем тике
+    таймера — то есть ровно тогда, когда Telegram просит перестать
+    стучаться, мы стучимся снова, и лимит только усугубляется.
+    Отдаём 429 с заголовком Retry-After и тем же значением в теле,
+    чтобы фронтенд (см. api.js) мог поставить именно этот запрос на
+    паузу на нужное время вместо того, чтобы упасть в тост с ошибкой.
+    """
+    logger.warning("Telegram FloodWait на %s: подождать %sс", request.url.path, exc.seconds)
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": str(exc.seconds)},
+        content={"detail": f"Telegram просит подождать {exc.seconds} сек.", "retry_after": exc.seconds},
+    )
 
 
 @app.exception_handler(AuthKeyUnregisteredError)

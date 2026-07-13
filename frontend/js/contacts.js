@@ -784,6 +784,7 @@ const Contacts = (() => {
   let ccMessagesAbortController = null;
 
   async function loadAndRenderMessages(c, { silent } = {}) {
+    if (silent && API.isBackedOff("/telegram/messages")) return;
     const requestedDialogId = c.telegram_id;
     activeChatTelegramId = requestedDialogId;
     const container = document.getElementById("chatMessages");

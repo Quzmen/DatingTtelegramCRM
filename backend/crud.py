@@ -347,12 +347,21 @@ def get_dashboard(db: Session) -> schemas.DashboardOut:
 
     needs_attention = len(contacts_needing_attention(db))
 
-    by_status = []
-    for status in models.STATUS_ORDER:
-        count = db.query(models.Contact).filter(models.Contact.status == status).count()
-        by_status.append(
-            schemas.StatusCount(status=status, label=models.STATUS_LABELS[status], count=count)
-        )
+    # Раньше здесь был отдельный db.query(...).count() на каждый статус
+    # (по одному round-trip'у в БД на колонку канбана) -- при большом
+    # количестве контактов и частом опросе дашборда это заметно
+    # нагружало БД впустую. GROUP BY отдаёт все счётчики одним запросом;
+    # статусы без единого контакта в таблице просто не попадут в counts_map,
+    # поэтому по ним честно подставляется 0, а не падаем на KeyError.
+    counts_map = dict(
+        db.query(models.Contact.status, func.count(models.Contact.id))
+        .group_by(models.Contact.status)
+        .all()
+    )
+    by_status = [
+        schemas.StatusCount(status=status, label=models.STATUS_LABELS[status], count=counts_map.get(status, 0))
+        for status in models.STATUS_ORDER
+    ]
 
     return schemas.DashboardOut(
         total_contacts=total,

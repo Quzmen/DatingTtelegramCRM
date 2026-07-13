@@ -16,7 +16,7 @@ const ChatView = (() => {
   // легко проверить в консоли, что все три значения dialog_id совпадают.
   // Включаются через localStorage.setItem('chatDebug','1') без правки кода.
   const DEBUG_CHAT = (() => {
-    try { return localStorage.getItem("chatDebug") !== "0"; } catch (_) { return true; }
+    try { return localStorage.getItem("chatDebug") === "1"; } catch (_) { return false; }
   })();
 
   let dialogs = [];
@@ -803,6 +803,11 @@ const ChatView = (() => {
   // применяется.
   async function refreshDialogs({ silent } = {}) {
     if (silent && Date.now() - lastDialogsFetchAt < DIALOGS_MIN_INTERVAL_MS) return;
+    // Telegram недавно ответил FloodWait на этот же эндпоинт (см.
+    // api.js/backend main.py _handle_flood_wait) — тихий опрос молча
+    // ждёт окончания паузы вместо того, чтобы стучаться повторно и
+    // усугублять лимит. Явный (не silent) вызов пользователя не блокируем.
+    if (silent && API.isBackedOff("/telegram/dialogs")) return;
 
     if (dialogsAbortController) dialogsAbortController.abort();
     const controller = new AbortController();
@@ -849,6 +854,7 @@ const ChatView = (() => {
   //    не совпало, отбрасывается и никогда не попадает на экран.
   async function loadMessages({ silent } = {}) {
     if (!activeId) return;
+    if (silent && API.isBackedOff("/telegram/messages")) return;
     const requestedDialogId = activeId;
     const box = $("threadMessages");
     const hasCached = !!(messagesByDialogId[requestedDialogId] && messagesByDialogId[requestedDialogId].length);
@@ -878,6 +884,7 @@ const ChatView = (() => {
 
   async function refreshPresence() {
     if (!activeId) return;
+    if (API.isBackedOff("/telegram/presence")) return;
     const requestedDialogId = activeId;
     try {
       const p = await API.tgPresence(requestedDialogId);

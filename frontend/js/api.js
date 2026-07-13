@@ -2,11 +2,44 @@
 const API = (() => {
   const BASE = "/api";
 
+  // Бэкофф по Telegram FloodWait (см. backend/main.py _handle_flood_wait).
+  // Ключ — префикс пути ("/telegram/dialogs", "/telegram/messages" и
+  // т.п.), значение — момент времени (мс), до которого повторные тихие
+  // опросы этого эндпоинта нужно пропускать. Раньше 429 от Telegram
+  // просто прилетал как обычная ошибка на один тик таймера, а на
+  // следующем тике (3-5с спустя) фронтенд как ни в чём не бывало снова
+  // стучался в тот же эндпоинт — усугубляя тот же FloodWait. Здесь мы
+  // запоминаем паузу и даём вызывающему коду (chatview.js/contacts.js)
+  // явно спросить "можно ли сейчас опрашивать этот путь".
+  const backoffUntil = {};
+
+  function backoffKey(path) {
+    // "/telegram/messages/123?limit=50" -> "/telegram/messages"
+    const clean = path.split("?")[0];
+    const parts = clean.split("/").filter(Boolean);
+    return "/" + parts.slice(0, 2).join("/");
+  }
+
+  function isBackedOff(path) {
+    const key = backoffKey(path);
+    return (backoffUntil[key] || 0) > Date.now();
+  }
+
   async function request(path, options = {}) {
     const res = await fetch(BASE + path, {
       headers: { "Content-Type": "application/json" },
       ...options,
     });
+    if (res.status === 429) {
+      const retryAfterHeader = Number(res.headers.get("Retry-After"));
+      let retryAfter = Number.isFinite(retryAfterHeader) ? retryAfterHeader : 30;
+      try {
+        const body = await res.json();
+        if (Number.isFinite(body.retry_after)) retryAfter = body.retry_after;
+      } catch (_) {}
+      backoffUntil[backoffKey(path)] = Date.now() + retryAfter * 1000;
+      throw new Error(`Telegram просит подождать ${retryAfter} сек.`);
+    }
     if (!res.ok) {
       let detail = res.statusText;
       try {
@@ -95,6 +128,7 @@ const API = (() => {
 
     tgMessages: (telegramId, limit = 50, signal = null) => request(`/telegram/messages/${telegramId}?limit=${limit}`, { signal }),
     isAbortError,
+    isBackedOff,
     tgSendMessage: (telegramId, text, replyTo = null) =>
       request(`/telegram/messages/${telegramId}`, { method: "POST", body: JSON.stringify({ text, reply_to: replyTo }) }),
     tgEditMessage: (telegramId, messageId, text) =>
