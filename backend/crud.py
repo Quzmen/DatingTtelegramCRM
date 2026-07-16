@@ -1099,3 +1099,103 @@ def list_stuck_running_campaigns(db: Session) -> List[models.Campaign]:
     без ведома пользователя) -- переводятся в PAUSED, откуда их можно
     осознанно продолжить."""
     return db.query(models.Campaign).filter(models.Campaign.status == models.CampaignStatus.RUNNING).all()
+
+
+# ---------------------------------------------------------------
+# Personal AI Operating System (см. ai_personal_engine.py)
+# ---------------------------------------------------------------
+
+def create_memory_item(db: Session, item: dict, source: str, contact_id: Optional[int] = None,
+                        source_text: Optional[str] = None) -> "models.AIMemoryItem":
+    row = models.AIMemoryItem(
+        kind=item["kind"],
+        title=item["title"],
+        details=item.get("details"),
+        contact_id=contact_id,
+        related_at=item.get("related_at"),
+        importance=item.get("importance", 0.5),
+        source=source,
+        source_text=source_text,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_memory_items(db: Session, contact_id: Optional[int] = None,
+                       kind: Optional[str] = None, only_open: bool = False,
+                       limit: int = 200) -> List["models.AIMemoryItem"]:
+    q = db.query(models.AIMemoryItem)
+    if contact_id is not None:
+        q = q.filter(models.AIMemoryItem.contact_id == contact_id)
+    if kind is not None:
+        q = q.filter(models.AIMemoryItem.kind == kind)
+    if only_open:
+        q = q.filter(models.AIMemoryItem.is_done.is_(False))
+    return q.order_by(models.AIMemoryItem.created_at.desc()).limit(limit).all()
+
+
+def get_memory_item(db: Session, item_id: int) -> Optional["models.AIMemoryItem"]:
+    return db.query(models.AIMemoryItem).filter(models.AIMemoryItem.id == item_id).first()
+
+
+def update_memory_item(db: Session, row: "models.AIMemoryItem", data: "schemas.AIMemoryItemUpdate") -> None:
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+
+
+def delete_memory_item(db: Session, row: "models.AIMemoryItem") -> None:
+    db.delete(row)
+    db.commit()
+
+
+def save_patterns(db: Session, patterns: List[dict]) -> List["models.AIPattern"]:
+    """Заменяет прошлый набор закономерностей новым — старые записи не
+    накапливаются бесконечно, актуален всегда последний пересчёт."""
+    db.query(models.AIPattern).delete()
+    rows = []
+    for p in patterns:
+        row = models.AIPattern(
+            title=p["title"],
+            description=p.get("description"),
+            confidence=p.get("confidence", 0.5),
+            evidence_json=json.dumps(p.get("evidence", []), ensure_ascii=False),
+        )
+        db.add(row)
+        rows.append(row)
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return rows
+
+
+def list_patterns(db: Session) -> List["models.AIPattern"]:
+    return db.query(models.AIPattern).order_by(models.AIPattern.confidence.desc()).all()
+
+
+def create_decision(db: Session, situation: str, options: List[dict]) -> "models.AIDecision":
+    row = models.AIDecision(
+        situation=situation,
+        options_json=json.dumps(options, ensure_ascii=False),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_decisions(db: Session, limit: int = 50) -> List["models.AIDecision"]:
+    return db.query(models.AIDecision).order_by(models.AIDecision.created_at.desc()).limit(limit).all()
+
+
+def get_decision(db: Session, decision_id: int) -> Optional["models.AIDecision"]:
+    return db.query(models.AIDecision).filter(models.AIDecision.id == decision_id).first()
+
+
+def choose_decision_option(db: Session, row: "models.AIDecision", chosen_option: str) -> None:
+    row.chosen_option = chosen_option
+    db.commit()
+    db.refresh(row)

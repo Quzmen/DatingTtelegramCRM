@@ -18,7 +18,7 @@ from telethon.errors import AuthKeyUnregisteredError, FloodWaitError
 
 from . import models
 from .database import engine, run_migrations, SessionLocal
-from .routers import contacts, dashboard, telegram, admin, folders, campaigns, media
+from .routers import contacts, dashboard, telegram, admin, folders, campaigns, media, ai_insights
 from .telegram_service import telegram_service
 from . import crud
 
@@ -36,6 +36,7 @@ app.include_router(admin.router)
 app.include_router(folders.router)
 app.include_router(campaigns.router)
 app.include_router(media.router)
+app.include_router(ai_insights.router)
 
 
 @app.on_event("startup")

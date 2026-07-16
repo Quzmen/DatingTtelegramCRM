@@ -128,4 +128,10 @@ AI_LLM_MAX_MESSAGES = int(os.environ.get("AI_LLM_MAX_MESSAGES", "60"))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+
+# ---- Personal AI Operating System (ai_personal_engine.py) ----
+# Отдельная, более мощная модель для "тяжёлых" задач этого слоя
+# (анализ паттернов, дерево решений) — быстрые операции (извлечение
+# памяти) используют обычный GEMINI_MODEL выше.
+GEMINI_MODEL_PRO = os.environ.get("GEMINI_MODEL_PRO", "gemini-flash-latest")
 LIVE_SCORE_MIN_INTERVAL = 60

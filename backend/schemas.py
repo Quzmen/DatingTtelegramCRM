@@ -584,3 +584,115 @@ class CampaignLogOut(BaseModel):
     error_text: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------- Personal AI Operating System ----------
+# См. models.py: AIMemoryItem/AIPattern/AIDecision анализируют только
+# самого пользователя (его заметки, задачи, привычки), не пытаются
+# профилировать или предсказывать поведение других людей.
+
+from .models import AIMemoryKind
+
+
+class AIMemoryItemOut(BaseModel):
+    id: int
+    kind: AIMemoryKind
+    title: str
+    details: Optional[str] = None
+    contact_id: Optional[int] = None
+    contact_name: Optional[str] = None
+    related_at: Optional[datetime] = None
+    importance: float = 0.5
+    source: str = "manual"
+    is_done: bool = False
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIMemoryItemCreate(BaseModel):
+    """Ручное добавление записи в память (без AI)."""
+    kind: AIMemoryKind = AIMemoryKind.FACT
+    title: str = Field(..., min_length=1, max_length=300)
+    details: Optional[str] = None
+    contact_id: Optional[int] = None
+    related_at: Optional[datetime] = None
+    importance: float = Field(default=0.5, ge=0, le=1)
+
+
+class AIMemoryItemUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=300)
+    details: Optional[str] = None
+    related_at: Optional[datetime] = None
+    importance: Optional[float] = Field(None, ge=0, le=1)
+    is_done: Optional[bool] = None
+
+
+class AIMemoryExtractIn(BaseModel):
+    """Вход для автоизвлечения памяти AI из произвольного текста
+    пользователя (заметка, описание задачи, дневниковая запись)."""
+    text: str = Field(..., min_length=1, max_length=8000)
+    contact_id: Optional[int] = None  # если текст относится к конкретному контакту
+
+
+class AIMemoryExtractOut(BaseModel):
+    items: List[AIMemoryItemOut]
+    conflicts: List[str] = Field(default_factory=list)  # человекочитаемые предупреждения о конфликтах по времени
+    source: str  # "gemini" | "local" — чем именно извлекли
+
+
+class AIPatternOut(BaseModel):
+    id: int
+    title: str
+    description: Optional[str] = None
+    confidence: float
+    evidence: List[str] = Field(default_factory=list)
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIDecisionOptionOut(BaseModel):
+    label: str
+    pros: List[str] = Field(default_factory=list)
+    cons: List[str] = Field(default_factory=list)
+    consequences: List[str] = Field(default_factory=list)
+
+
+class AIDecisionIn(BaseModel):
+    situation: str = Field(..., min_length=1, max_length=2000)
+    options: List[str] = Field(..., min_length=1, max_length=6)
+
+
+class AIDecisionOut(BaseModel):
+    id: int
+    situation: str
+    options: List[AIDecisionOptionOut]
+    chosen_option: Optional[str] = None
+    created_at: datetime
+    source: str = "gemini"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIDecisionChooseIn(BaseModel):
+    chosen_option: str = Field(..., min_length=1, max_length=300)
+
+
+class AITimelineEntryOut(BaseModel):
+    kind: str          # "memory" | "task" | "reminder"
+    title: str
+    details: Optional[str] = None
+    at: Optional[datetime] = None
+    bucket: str         # "past" | "present" | "future"
+    contact_id: Optional[int] = None
+    contact_name: Optional[str] = None
+
+
+class AIInsightsOut(BaseModel):
+    memory_count: int
+    open_commitments: int
+    recent_memory: List[AIMemoryItemOut]
+    patterns: List[AIPatternOut]
+    recent_decisions: List[AIDecisionOut]
+    recommendations: List[str]

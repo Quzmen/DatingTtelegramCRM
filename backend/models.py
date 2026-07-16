@@ -151,6 +151,99 @@ class Interaction(Base):
 
     contact = relationship("Contact", back_populates="interactions")
 
+
+# ---------------------------------------------------------------
+# Personal AI Operating System (см. ai_personal_engine.py)
+#
+# ВАЖНО: этот слой анализирует только САМОГО пользователя — его
+# заметки, задачи, договорённости, повторяющиеся привычки, — а не
+# пытается профилировать или предсказывать поведение других людей.
+# AIMemoryItem может ссылаться на contact_id чисто как на "с кем
+# связано событие" (например "встреча с другом"), но не хранит и не
+# считает никаких оценок вроде "вероятность ответа" или "интерес" —
+# для конкретного собеседника это уже отдельная, не связанная с этим
+# модулем функциональность (Contact Intelligence, см. ai_gemini.py).
+# ---------------------------------------------------------------
+
+class AIMemoryKind(str, enum.Enum):
+    EVENT = "event"              # разовое событие (встреча, звонок)
+    COMMITMENT = "commitment"    # обещание/договорённость пользователя
+    PLAN = "plan"                 # план на будущее
+    PREFERENCE = "preference"    # личное предпочтение пользователя
+    FACT = "fact"                 # прочий важный факт
+
+
+class AIMemoryItem(Base):
+    """Один факт из персональной долговременной памяти пользователя,
+    извлечённый AI (или добавленный вручную) из заметки/задачи/текста.
+    Не хранит никаких оценок поведения других людей — только то, что
+    сам пользователь сказал о себе, своих планах и договорённостях."""
+    __tablename__ = "ai_memory_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(Enum(AIMemoryKind), default=AIMemoryKind.FACT, nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    details = Column(Text, nullable=True)
+
+    # С чем/кем связано — оба необязательны и служат только для
+    # отображения контекста (например "встреча" + этот контакт), не
+    # для анализа собеседника.
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    related_at = Column(DateTime, nullable=True, index=True)  # дата/время самого события (не создания записи)
+
+    importance = Column(Float, default=0.5, nullable=False)  # 0..1, для сортировки на дашборде
+    source = Column(String(30), default="manual", nullable=False)  # manual | ai_extracted
+    source_text = Column(Text, nullable=True)  # исходный текст, из которого извлекли (для прозрачности)
+
+    is_done = Column(Boolean, default=False, nullable=False)  # для commitment/plan — выполнено ли
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    contact = relationship("Contact")
+
+
+class AIPattern(Base):
+    """Закономерность в собственном поведении пользователя, найденная
+    Pattern Analyzer'ом (например "чаще завершает задачи по утрам").
+    Пересчитывается периодически, старые записи заменяются новыми —
+    хранится история, чтобы видеть, как менялись выводы со временем."""
+    __tablename__ = "ai_patterns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(300), nullable=False)
+    description = Column(Text, nullable=True)
+    confidence = Column(Float, default=0.5, nullable=False)  # 0..1 — насколько AI уверен в закономерности
+    evidence_json = Column(Text, nullable=True)  # на каких данных основан вывод (JSON-список коротких фактов)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def evidence(self):
+        return _json_load_list(self.evidence_json)
+
+
+class AIDecision(Base):
+    """Дерево решений пользователя: одна конкретная ситуация выбора
+    ("на что потратить 3 часа") + варианты действий, для каждого из
+    которых AI показывает возможные последствия ЛИЧНО ДЛЯ
+    ПОЛЬЗОВАТЕЛЯ (не для того, как отреагирует другой человек).
+    AI не говорит, какой вариант выбрать — только раскладывает
+    последствия по каждому, решение остаётся за пользователем."""
+    __tablename__ = "ai_decisions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    situation = Column(Text, nullable=False)          # описание ситуации/выбора от пользователя
+    options_json = Column(Text, nullable=False)        # варианты + сгенерированные последствия, см. schemas.AIDecisionOption
+    chosen_option = Column(String(300), nullable=True)  # что в итоге выбрал пользователь (опционально, для истории)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def options(self):
+        return _json_load_list(self.options_json)
+
+
 class TelegramSettings(Base):
     """Хранит StringSession Telethon в БД (а не в файле на диске), чтобы
     авторизация переживала перезапуски Render, редеплои и пересборку

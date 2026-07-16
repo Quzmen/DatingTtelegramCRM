@@ -1,0 +1,315 @@
+/* AI Insights (Personal AI Operating System) — styling for the
+   memory / timeline / decisions / patterns / recommendations tabs.
+   Matches the existing panel/card language in style.css. */
+
+.ai-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 20px;
+  flex-wrap: wrap;
+}
+
+.ai-tabs__btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+
+.ai-tabs__btn:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.ai-tabs__btn.is-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.ai-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ai-empty {
+  color: var(--ink-faint);
+  font-size: 13.5px;
+  padding: 18px 4px;
+  text-align: center;
+}
+
+.ai-empty--small {
+  padding: 8px 0;
+}
+
+/* ---- Memory ---- */
+
+.ai-memory-form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.ai-memory-form textarea {
+  flex: 1;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.ai-memory-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-conflict {
+  background: var(--amber-tint);
+  color: var(--amber);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.ai-memory-list, .ai-decision-list, .ai-pattern-list, .ai-recommend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-item input[type="checkbox"] {
+  margin-top: 3px;
+}
+
+.ai-item__body { flex: 1; min-width: 0; }
+
+.ai-item__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-item__kind {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+  border-radius: 6px;
+  padding: 2px 7px;
+  background: var(--slate-tint);
+  color: var(--slate);
+}
+
+.ai-item__kind--event { background: var(--primary-tint); color: var(--primary-ink); }
+.ai-item__kind--commitment { background: var(--rose-tint); color: var(--rose); }
+.ai-item__kind--plan { background: var(--teal-tint); color: var(--teal); }
+.ai-item__kind--preference { background: var(--amber-tint); color: var(--amber); }
+
+.ai-item__details {
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+}
+
+.ai-item__meta {
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+
+.ai-item__contact { margin-left: 4px; }
+
+.ai-item__del {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.ai-item__del:hover { color: var(--rose); }
+
+/* ---- Timeline ---- */
+
+.ai-timeline {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.ai-timeline__col h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--ink-faint);
+  margin: 0 0 10px;
+}
+
+.ai-timeline__entry {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.ai-timeline__title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.ai-timeline__at { font-size: 12px; color: var(--ink-faint); margin-top: 3px; }
+
+/* ---- Decisions ---- */
+
+.ai-decision-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.ai-decision-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.ai-decision-form textarea {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13.5px;
+  background: var(--surface-2);
+  resize: vertical;
+}
+
+.ai-decision {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-decision__situation {
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+
+.ai-decision__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.ai-decision__option {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+
+.ai-decision__option.is-chosen {
+  border-color: var(--teal);
+  background: var(--teal-tint);
+}
+
+.ai-decision__option-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ai-decision__badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--teal);
+  text-transform: uppercase;
+}
+
+.ai-decision__block {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+}
+
+.ai-decision__block span {
+  font-weight: 700;
+  color: var(--ink-faint);
+}
+
+.btn--tiny {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+/* ---- Patterns ---- */
+
+.ai-pattern {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-pattern__title { font-weight: 700; color: var(--ink); font-size: 14px; }
+.ai-pattern__desc { font-size: 13px; color: var(--ink-soft); margin-top: 4px; }
+.ai-pattern__confidence { font-size: 12px; color: var(--primary-ink); margin-top: 6px; font-weight: 600; }
+.ai-pattern__evidence { font-size: 12px; color: var(--ink-faint); margin-top: 4px; }
+
+/* ---- Recommendations ---- */
+
+.ai-recommend {
+  background: var(--primary-tint);
+  color: var(--primary-ink);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .ai-timeline { grid-template-columns: 1fr; }
+}

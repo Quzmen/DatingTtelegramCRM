@@ -1,6 +1,6 @@
 /* Точка входа: переключение видов и инициализация модулей. */
 const App = (() => {
-  const views = ["dashboard", "chat", "contacts", "telegram", "campaigns"];
+  const views = ["dashboard", "chat", "contacts", "telegram", "campaigns", "ai"];
   let contactsMode = "table"; // "table" | "kanban" — CRM sub-view, not a top-level nav item
 
   function switchView(name) {
@@ -16,6 +16,7 @@ const App = (() => {
     if (name === "contacts" && contactsMode === "kanban") Kanban.render();
     if (name === "telegram") Telegram.render();
     if (name === "campaigns") Campaigns.render();
+    if (name === "ai") AIInsights.render();
     if (name !== "contacts") Contacts.stopChatPolling();
     if (name !== "chat") ChatView.stopPolling();
     if (name !== "campaigns") Campaigns.stopPolling();
@@ -65,6 +66,7 @@ const App = (() => {
   async function init() {
     wireNav();
     Folders.wire();
+    AIInsights.wire();
     await Contacts.init();
     await Dashboard.render();
     switchView("dashboard");

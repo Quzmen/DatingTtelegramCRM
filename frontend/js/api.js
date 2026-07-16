@@ -230,6 +230,28 @@ const API = (() => {
       request(`/telegram/messages/${telegramId}/media/${mediaId}`, {
         method: "POST", body: JSON.stringify({ caption, reply_to: replyTo }),
       }),
+
+    // AI Insights (Personal AI Operating System) — только про самого
+    // пользователя, см. backend/ai_personal_engine.py
+    aiExtractMemory: (text, contactId = null) =>
+      request(`/ai/memory/extract`, { method: "POST", body: JSON.stringify({ text, contact_id: contactId }) }),
+    aiListMemory: (params = {}) => {
+      const qs = new URLSearchParams(
+        Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null))
+      ).toString();
+      return request(`/ai/memory${qs ? "?" + qs : ""}`);
+    },
+    aiUpdateMemory: (id, data) => request(`/ai/memory/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    aiDeleteMemory: (id) => request(`/ai/memory/${id}`, { method: "DELETE" }),
+    aiTimeline: () => request(`/ai/timeline`),
+    aiGetPatterns: () => request(`/ai/patterns`),
+    aiRefreshPatterns: () => request(`/ai/patterns/refresh`, { method: "POST" }),
+    aiCreateDecision: (situation, options) =>
+      request(`/ai/decisions`, { method: "POST", body: JSON.stringify({ situation, options }) }),
+    aiListDecisions: () => request(`/ai/decisions`),
+    aiChooseDecision: (id, chosenOption) =>
+      request(`/ai/decisions/${id}/choose`, { method: "POST", body: JSON.stringify({ chosen_option: chosenOption }) }),
+    aiGetInsights: () => request(`/ai/insights`),
   };
 })();
 

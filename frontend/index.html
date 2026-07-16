@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/css/chatview.css">
 <link rel="stylesheet" href="/css/campaigns.css">
 <link rel="stylesheet" href="/css/medialibrary.css">
+<link rel="stylesheet" href="/css/ai_insights.css">
 </head>
 <body>
 
@@ -32,6 +33,9 @@
     </button>
     <button class="railnav__btn" data-view="campaigns" title="Кампании">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11v2a2 2 0 0 0 2 2h1l3.5 4.5V6.5L6 11H5a2 2 0 0 0-2 2Z"/><path d="M14 8.5a5 5 0 0 1 0 7"/><path d="M17.3 5.5a9 9 0 0 1 0 13"/></svg>
+    </button>
+    <button class="railnav__btn" data-view="ai" title="AI Insights">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a4 4 0 0 0-4 4v1.3A5 5 0 0 0 5 13v2a3 3 0 0 0 3 3h.5l.8 3h5.4l.8-3H16a3 3 0 0 0 3-3v-2a5 5 0 0 0-3-4.7V7a4 4 0 0 0-4-4Z"/><path d="M9.5 21h5"/></svg>
     </button>
     <div class="railnav__spacer"></div>
     <button class="railnav__btn" id="btnAttention" title="Требуют внимания">
@@ -282,6 +286,62 @@
     <div class="campaign-list" id="campaignList"></div>
   </main>
 
+  <!-- ===== AI Insights view (Personal AI Operating System) ===== -->
+  <main class="view" id="view-ai" hidden>
+    <header class="view__head">
+      <div>
+        <h1>AI Insights</h1>
+        <p class="view__sub">Личная память, паттерны и разбор решений — только про вас, не про собеседников</p>
+      </div>
+    </header>
+
+    <section class="ai-tabs">
+      <button class="ai-tabs__btn is-active" data-aitab="memory">Память</button>
+      <button class="ai-tabs__btn" data-aitab="timeline">Таймлайн</button>
+      <button class="ai-tabs__btn" data-aitab="decisions">Решения</button>
+      <button class="ai-tabs__btn" data-aitab="patterns">Паттерны</button>
+      <button class="ai-tabs__btn" data-aitab="recommendations">Рекомендации</button>
+    </section>
+
+    <!-- Memory -->
+    <section class="ai-panel" id="aiPanelMemory">
+      <form class="ai-memory-form" id="aiMemoryForm">
+        <textarea id="aiMemoryInput" placeholder="Опишите что-то своими словами: «В пятницу встречаюсь с другом в 18:00» — AI сам достанет из этого событие и договорённость…" rows="2"></textarea>
+        <button type="submit" class="btn btn--primary">Запомнить</button>
+      </form>
+      <div class="ai-memory-conflicts" id="aiMemoryConflicts" hidden></div>
+      <div class="ai-memory-list" id="aiMemoryList"></div>
+    </section>
+
+    <!-- Timeline -->
+    <section class="ai-panel" id="aiPanelTimeline" hidden>
+      <div class="ai-timeline" id="aiTimeline"></div>
+    </section>
+
+    <!-- Decisions -->
+    <section class="ai-panel" id="aiPanelDecisions" hidden>
+      <form class="ai-decision-form" id="aiDecisionForm">
+        <label>Ситуация<textarea id="aiDecisionSituation" rows="2" placeholder="Например: есть 3 часа свободного времени"></textarea></label>
+        <label>Варианты (по одному на строку)
+          <textarea id="aiDecisionOptions" rows="3" placeholder="Работать над проектом&#10;Отдохнуть"></textarea>
+        </label>
+        <button type="submit" class="btn btn--primary">Разложить последствия</button>
+      </form>
+      <div class="ai-decision-list" id="aiDecisionList"></div>
+    </section>
+
+    <!-- Patterns -->
+    <section class="ai-panel" id="aiPanelPatterns" hidden>
+      <button class="btn" id="btnRefreshPatterns">Пересчитать паттерны</button>
+      <div class="ai-pattern-list" id="aiPatternList"></div>
+    </section>
+
+    <!-- Recommendations -->
+    <section class="ai-panel" id="aiPanelRecommendations" hidden>
+      <div class="ai-recommend-list" id="aiRecommendList"></div>
+    </section>
+  </main>
+
 </div>
 
 <!-- ===== Modal: forward message ===== -->
@@ -354,6 +414,7 @@
 <script src="/js/kanban.js"></script>
 <script src="/js/telegram.js"></script>
 <script src="/js/campaigns.js"></script>
+<script src="/js/ai_insights.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
