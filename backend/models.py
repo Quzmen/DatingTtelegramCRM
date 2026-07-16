@@ -291,6 +291,29 @@ class AIOverviewSnapshot(Base):
         return _json_load_list(self.data_needed_json)
 
 
+class GeminiCallLog(Base):
+    """Служебная таблица для общего (на все поды/воркеры) лимитера
+    запросов к Gemini — см. ai_gemini._wait_for_quota_slot().
+
+    Реальный лимит free-тарифа (generate_content_free_tier_requests,
+    limit=20/мин) считается ОДИН на весь GEMINI_API_KEY, а не на
+    процесс — если сервис поднят в нескольких репликах, у каждой свой
+    процессный лимитер (asyncio.Lock) ничего не знает о запросах
+    других реплик, и вместе они всё равно превышают общий лимит. Эта
+    таблица — общий на все поды счётчик через единственную БД, которая
+    и так одна на всех: перед каждым реальным HTTP-запросом к Gemini
+    пишем сюда строку, и если строк за последние 60 секунд уже
+    накопилось близко к лимиту — ждём, вместо того чтобы стрелять
+    запросом, который гарантированно словит 429.
+
+    Строки старше минуты периодически подчищаются (см. функцию),
+    поэтому таблица не растёт бесконечно."""
+    __tablename__ = "gemini_call_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class TelegramSettings(Base):
     """Хранит StringSession Telethon в БД (а не в файле на диске), чтобы
     авторизация переживала перезапуски Render, редеплои и пересборку

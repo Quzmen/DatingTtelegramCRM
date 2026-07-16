@@ -135,11 +135,11 @@ async def _call(system_prompt: str, user_content: str, complexity: str = "fast")
         "generationConfig": {"responseMimeType": "application/json"},
     }
     headers = {"Content-Type": "application/json", "X-goog-api-key": config.GEMINI_API_KEY}
-    # Тот же общий лимитер, что и у ai_gemini._call_gemini — иначе
-    # запросы этого модуля (память/паттерны/решения) идут в обход паузы
-    # и всё равно упираются в общий лимит Gemini вместе с Contact
-    # Intelligence / Deep Report / AI Overview.
-    await ai_gemini._pace_request()
+    # Тот же общий (на все поды) лимитер, что и у ai_gemini._call_gemini
+    # — иначе запросы этого модуля (память/паттерны/решения) идут в
+    # обход общего счётчика и всё равно пробивают общий лимит Gemini
+    # вместе с Contact Intelligence/Deep Report/AI Overview.
+    await ai_gemini._wait_for_quota_slot()
     try:
         async with httpx.AsyncClient(timeout=config.AI_LLM_TIMEOUT, proxy=config.HTTP_PROXY_URL) as client:
             response = await client.post(url, headers=headers, json=payload)

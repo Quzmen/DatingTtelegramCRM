@@ -14,7 +14,7 @@ Google Gemini). Активен при AI_PROVIDER=gemini + заданном GEMI
 """
 import asyncio
 import logging
-import time
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from . import ai_common, config, models
@@ -32,40 +32,39 @@ GEMINI_URL_TMPL = (
 RETRY_DELAY_SECONDS = 8
 # Отдельно для 429: одного повтора часто не хватает, лимит free-тарифа
 # считается за минуту целиком — пробуем ещё раз с более длинной паузой,
-# прежде чем сдаваться и откатываться на локальный результат.
+# прежде чем сдаваться и откатываться на локальный результат. Если
+# Google в ответе прислал свой retryDelay (см. _parse_quota_error) —
+# используем его вместо этих чисел, они только фолбэк на случай, если
+# сервис его не прислал.
 RATE_LIMIT_MAX_RETRIES = 2
 RATE_LIMIT_RETRY_DELAYS = (8, 20)
 
 # ---------------------------------------------------------------
-# Пейсинг между запросами к Gemini в пределах одного процесса.
+# Общий (на все поды/воркеры) лимитер запросов к Gemini.
 #
-# "Полный AI-анализ" (routers/contacts.py: full_ai_scan) делает подряд
-# ДО ЧЕТЫРЁХ вызовов _call_gemini за один клик (Contact Intelligence +
-# Deep Report + 2 внутри AI Overview) — без этого лимитера они уходят
-# в Gemini почти одновременно и почти гарантированно ловят 429 на
-# бесплатном тарифе. MIN_INTERVAL_SECONDS гарантирует минимальный
-# промежуток между НАЧАЛОМ каждого запроса, независимо от того, из
-# какого эндпоинта он пришёл — тем самым все вызовы в рамках одного
-# воркера автоматически выстраиваются в очередь с паузами, как раньше
-# получалось само собой, когда пользователь жал на разные кнопки в
-# разное время.
+# Реальная причина 429 из логов: "limit: 20, model: gemini-3.5-flash"
+# на метрике generate_content_free_tier_requests — это ОБЩИЙ лимит на
+# весь GEMINI_API_KEY, а не на один процесс. Сервис поднят в нескольких
+# репликах (в логах видно 2-3 разных IP пода) — у каждой был свой
+# процессный лимитер (asyncio.Lock + метка времени в памяти), который
+# ничего не знал о запросах ДРУГИХ реплик, поэтому втроём они всё равно
+# легко пробивали общие 20/мин, даже когда каждая по отдельности честно
+# выдерживала паузу.
 #
-# Ограничение: лимитер процессный, а не общий на все воркеры/поды —
-# если сервис поднят в нескольких репликах на одном GEMINI_API_KEY,
-# паузы между запросами ИЗ РАЗНЫХ ПОДОВ этим не покрываются. Для
-# полного решения нужен общий счётчик (Redis/БД), но и процессного
-# лимитера достаточно, чтобы убрать проблему при одном клике по
-# "Полный AI-анализ" — исходную причину регресса.
+# Раз лимит общий на ключ — лимитер тоже должен быть общим, а не
+# процессным. Общее у всех реплик — только база данных, поэтому лимитер
+# здесь реализован через неё: перед каждым реальным HTTP-запросом к
+# Gemini пишем метку времени в gemini_call_log (см. models.py) и
+# считаем, сколько таких меток набралось за последние 60 секунд СО ВСЕХ
+# ПОДОВ СРАЗУ. Если близко к лимиту — ждём и проверяем снова, вместо
+# того чтобы стрелять запросом, который почти наверняка словит 429.
+# GEMINI_SAFE_RPM (см. config.py) берётся с запасом ниже реального
+# лимита (20), чтобы пережить неточность тайминга между подами и не
+# считать впритык.
 # ---------------------------------------------------------------
-# MIN_INTERVAL_SECONDS ниже — консервативная оценка. Если у вас по-прежнему
-# видны 429 после этого фикса, значит реальный лимит вашего тарифа Gemini
-# ещё жёстче (особенно если GEMINI_MODEL/GEMINI_MODEL_PRO указывают на
-# модель уровня Pro — на free-тарифе у неё лимит обычно намного строже,
-# чем у Flash) — тогда стоит либо поднять это число ещё, либо перевести
-# Deep Report/AI Overview из автоматического вызова в ручной, по запросу.
-MIN_INTERVAL_SECONDS = 12
-_pacing_lock = asyncio.Lock()
-_last_call_at = 0.0
+QUOTA_WINDOW_SECONDS = 60
+QUOTA_POLL_INTERVAL = 2.0
+QUOTA_MAX_WAIT_SECONDS = 90  # не ждать бесконечно — после этого просто пробуем (и, если что, ловим 429 честно)
 
 
 class GeminiError(Exception):
@@ -74,13 +73,41 @@ class GeminiError(Exception):
     routers/contacts.py), а не заставлять лезть в терминал backend'а."""
 
 
-async def _pace_request() -> None:
-    global _last_call_at
-    async with _pacing_lock:
-        wait_for = MIN_INTERVAL_SECONDS - (time.monotonic() - _last_call_at)
-        if wait_for > 0:
-            await asyncio.sleep(wait_for)
-        _last_call_at = time.monotonic()
+async def _wait_for_quota_slot() -> None:
+    """Блокирует выполнение (в отдельном потоке, чтобы не морозить event
+    loop синхронными запросами к БД), пока в общем окне за последние 60
+    секунд не появится свободное место под ещё один запрос к Gemini —
+    считая запросы СО ВСЕХ ПОДОВ, а не только текущего процесса."""
+    from .database import SessionLocal
+
+    def _try_reserve_slot() -> bool:
+        db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(seconds=QUOTA_WINDOW_SECONDS)
+            # Чистим старые метки — иначе таблица растёт бесконечно.
+            db.query(models.GeminiCallLog).filter(models.GeminiCallLog.created_at < cutoff).delete()
+            count = db.query(models.GeminiCallLog).filter(models.GeminiCallLog.created_at >= cutoff).count()
+            if count >= config.GEMINI_SAFE_RPM:
+                db.commit()
+                return False
+            db.add(models.GeminiCallLog(created_at=datetime.utcnow()))
+            db.commit()
+            return True
+        finally:
+            db.close()
+
+    waited = 0.0
+    while waited < QUOTA_MAX_WAIT_SECONDS:
+        got_slot = await asyncio.to_thread(_try_reserve_slot)
+        if got_slot:
+            return
+        logger.info("Gemini: общий лимит (%s/мин на все поды) занят, жду %sс…",
+                    config.GEMINI_SAFE_RPM, QUOTA_POLL_INTERVAL)
+        await asyncio.sleep(QUOTA_POLL_INTERVAL)
+        waited += QUOTA_POLL_INTERVAL
+    # Не дождались за отведённое время — пробуем всё равно; если лимит
+    # правда занят, получим честный 429 и обработаем его как обычно.
+    logger.warning("Gemini: не дождались свободного места в лимите за %sс, пробуем как есть", QUOTA_MAX_WAIT_SECONDS)
 
 
 async def _call_gemini(system_prompt: str, user_content: str, *, _retry_count: int = 0) -> dict:
@@ -96,8 +123,9 @@ async def _call_gemini(system_prompt: str, user_content: str, *, _retry_count: i
     except ImportError:
         raise GeminiError("пакет httpx не установлен (pip install -r requirements.txt)")
 
-    if _retry_count == 0:
-        await _pace_request()
+    # Гейтим КАЖДУЮ попытку, включая повторы — ретрай тоже реальный HTTP-
+    # запрос, который расходует общий лимит наравне с первой попыткой.
+    await _wait_for_quota_slot()
 
     url = GEMINI_URL_TMPL.format(model=config.GEMINI_MODEL)
     payload = {

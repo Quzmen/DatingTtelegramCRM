@@ -134,4 +134,9 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 # (анализ паттернов, дерево решений) — быстрые операции (извлечение
 # памяти) используют обычный GEMINI_MODEL выше.
 GEMINI_MODEL_PRO = os.environ.get("GEMINI_MODEL_PRO", "gemini-flash-latest")
+
+# Общий (на все поды/воркеры) лимит запросов к Gemini в минуту — см. ai_gemini._wait_for_quota_slot().
+# Реальный лимит free-тарифа Gemini по факту оказался 20/мин (см. лог ошибки 429) —
+# берём с запасом ниже, чтобы пережить неточность тайминга между подами.
+GEMINI_SAFE_RPM = int(os.environ.get("GEMINI_SAFE_RPM", "16"))
 LIVE_SCORE_MIN_INTERVAL = 60
