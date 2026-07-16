@@ -14,6 +14,21 @@ from . import models, schemas, media_manager
 ATTENTION_THRESHOLD_DAYS = 7
 
 
+def _naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Telethon отдаёт timezone-aware datetime (UTC), а колонки в БД —
+    naive (см. models.py, везде DateTime без timezone). Сравнение aware
+    и naive datetime кидает TypeError (см. sync_service.py:
+    "can't compare offset-naive and offset-aware datetimes"), поэтому
+    любой datetime из Telegram нормализуем к naive UTC до того, как он
+    попадёт в сравнение или в колонку."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        from datetime import timezone
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 # ---------------------------------------------------------------
 # Telegram StringSession (см. models.TelegramSettings) — одна строка
 # на всё приложение (один Telegram-аккаунт на CRM).
@@ -482,6 +497,7 @@ def touch_contact_last_contact(db: Session, telegram_id: int, when: datetime) ->
     Telegram (входящее/исходящее сообщение). Обновляет только если
     новое событие свежее того, что уже сохранено — так поздние
     ретро-синки (full_sync) не затирают более свежие живые события."""
+    when = _naive_utc(when)
     contact = (
         db.query(models.Contact)
         .filter(models.Contact.telegram_id == telegram_id)
@@ -512,6 +528,8 @@ def upsert_dialog(
     if dialog is None:
         dialog = models.Dialog(telegram_id=telegram_id)
         db.add(dialog)
+
+    last_message_date = _naive_utc(last_message_date)
 
     contact = (
         db.query(models.Contact)
@@ -578,7 +596,7 @@ def upsert_message(
         db.add(msg)
 
     msg.text = text
-    msg.date = date
+    msg.date = _naive_utc(date)
     msg.out = out
     msg.kind = kind
     msg.duration = duration
