@@ -127,16 +127,27 @@ AI_LLM_TIMEOUT = int(os.environ.get("AI_LLM_TIMEOUT", "20"))
 AI_LLM_MAX_MESSAGES = int(os.environ.get("AI_LLM_MAX_MESSAGES", "60"))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+# ВАЖНО: "gemini-flash-latest" сейчас резолвится в gemini-3.5-flash, а у
+# неё free-тариф даёт всего 5 запросов/мин (см. панель Rate Limit в AI
+# Studio — там же видно, что и RPD у неё почти на пределе). Для CRM,
+# где на один /analyze уходит несколько вызовов Gemini подряд
+# (enrich + deep-report + overview + personal engine), этого не хватает
+# даже одному пользователю. gemini-2.5-flash на free-тарифе даёт кратно
+# больше и по RPM, и по RPD.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ---- Personal AI Operating System (ai_personal_engine.py) ----
 # Отдельная, более мощная модель для "тяжёлых" задач этого слоя
 # (анализ паттернов, дерево решений) — быстрые операции (извлечение
 # памяти) используют обычный GEMINI_MODEL выше.
-GEMINI_MODEL_PRO = os.environ.get("GEMINI_MODEL_PRO", "gemini-flash-latest")
+GEMINI_MODEL_PRO = os.environ.get("GEMINI_MODEL_PRO", "gemini-2.5-flash")
 
 # Общий (на все поды/воркеры) лимит запросов к Gemini в минуту — см. ai_gemini._wait_for_quota_slot().
-# Реальный лимит free-тарифа Gemini по факту оказался 20/мин (см. лог ошибки 429) —
-# берём с запасом ниже, чтобы пережить неточность тайминга между подами.
-GEMINI_SAFE_RPM = int(os.environ.get("GEMINI_SAFE_RPM", "16"))
+# Раньше здесь стояло 16 в предположении, что free-тариф даёт 20/мин —
+# это оказалось неверно: панель Rate Limit в AI Studio показывает
+# реальный лимит 5/мин для gemini-3.5-flash. Даже после смены модели на
+# gemini-2.5-flash держим лимитер консервативным (с запасом ниже
+# официального RPM), чтобы не полагаться на текст ошибки 429, который
+# не всегда указывает точное значение сработавшей метрики.
+GEMINI_SAFE_RPM = int(os.environ.get("GEMINI_SAFE_RPM", "8"))
 LIVE_SCORE_MIN_INTERVAL = 60
