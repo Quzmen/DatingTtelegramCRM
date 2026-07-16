@@ -641,6 +641,27 @@ class AIMemoryExtractOut(BaseModel):
     source: str  # "gemini" | "local" — чем именно извлекли
 
 
+class AIOverviewScenarioOut(BaseModel):
+    label: str
+    probability: str  # "высокая" | "средняя" | "низкая" — качественная, не числовая оценка
+    signals: List[str] = Field(default_factory=list)
+    likely_next_step: str = ""
+
+
+class AIOverviewOut(BaseModel):
+    contact_id: int
+    generated_at: datetime
+    current_state: str
+    key_factors: List[str] = Field(default_factory=list)
+    scenarios: List[AIOverviewScenarioOut] = Field(default_factory=list)
+    change_triggers: List[str] = Field(default_factory=list)
+    data_used: List[str] = Field(default_factory=list)
+    data_needed: List[str] = Field(default_factory=list)
+    confidence: Optional[str] = None
+    risk_note: Optional[str] = None
+    source: str = "gemini"
+
+
 class AIPatternOut(BaseModel):
     id: int
     title: str

@@ -1199,3 +1199,46 @@ def choose_decision_option(db: Session, row: "models.AIDecision", chosen_option:
     row.chosen_option = chosen_option
     db.commit()
     db.refresh(row)
+
+
+# ---------------------------------------------------------------
+# AI Overview (см. backend/ai_overview.py)
+# ---------------------------------------------------------------
+
+def save_ai_overview(db: Session, contact_id: int, result: dict) -> "models.AIOverviewSnapshot":
+    """Сохраняет новый снимок AI Overview. Старые снимки НЕ удаляются
+    (в отличие от save_patterns) — нужна история для сравнения "было ->
+    стало" в следующем анализе, см. ai_overview._gather_context."""
+    row = models.AIOverviewSnapshot(
+        contact_id=contact_id,
+        current_state=result["current_state"],
+        key_factors_json=json.dumps(result.get("key_factors", []), ensure_ascii=False),
+        scenarios_json=json.dumps(result.get("scenarios", []), ensure_ascii=False),
+        change_triggers_json=json.dumps(result.get("change_triggers", []), ensure_ascii=False),
+        data_used_json=json.dumps(result.get("data_used", []), ensure_ascii=False),
+        data_needed_json=json.dumps(result.get("data_needed", []), ensure_ascii=False),
+        confidence=result.get("confidence"),
+        risk_note=result.get("risk_note"),
+        source=result.get("source", "gemini"),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_ai_overview_snapshots(db: Session, contact_id: int, limit: int = 2) -> List["models.AIOverviewSnapshot"]:
+    """Возвращает последние снимки, от новых к старым (используется как
+    для показа истории, так и как контекст для следующего анализа)."""
+    return (
+        db.query(models.AIOverviewSnapshot)
+        .filter(models.AIOverviewSnapshot.contact_id == contact_id)
+        .order_by(models.AIOverviewSnapshot.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_latest_ai_overview(db: Session, contact_id: int) -> Optional["models.AIOverviewSnapshot"]:
+    rows = list_ai_overview_snapshots(db, contact_id, limit=1)
+    return rows[0] if rows else None

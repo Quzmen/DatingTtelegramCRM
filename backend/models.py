@@ -244,6 +244,53 @@ class AIDecision(Base):
         return _json_load_list(self.options_json)
 
 
+class AIOverviewSnapshot(Base):
+    """Снимок AI Overview для контакта: не число и не статус, а
+    структурированная картина "текущее состояние + дерево возможных
+    сценариев", построенная по фактам/событиям пользователя, истории
+    чата и предыдущим снимкам (в т.ч. предыдущим deep_report). Хранится
+    история снимков (не перезаписывается), чтобы следующий анализ мог
+    сравнить "было -> стало", а не начинать с нуля каждый раз."""
+    __tablename__ = "ai_overview_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    current_state = Column(Text, nullable=False)          # краткая картина текущего состояния
+    key_factors_json = Column(Text, nullable=True)         # список ключевых факторов (строки)
+    scenarios_json = Column(Text, nullable=False)          # список веток дерева (см. schemas.AIOverviewScenarioOut)
+    change_triggers_json = Column(Text, nullable=True)     # что может изменить сценарий
+    data_used_json = Column(Text, nullable=True)           # какие источники реально использовались
+    data_needed_json = Column(Text, nullable=True)         # каких данных не хватает для точности
+    confidence = Column(String(10), nullable=True)         # "высокая" | "средняя" | "низкая" — общая по снимку
+    risk_note = Column(Text, nullable=True)                # заполняется только если модель увидела конкретный тревожный признак в фактах
+
+    source = Column(String(20), default="gemini", nullable=False)  # "gemini" | "local" (откат при недоступности Gemini)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    contact = relationship("Contact")
+
+    @property
+    def key_factors(self):
+        return _json_load_list(self.key_factors_json)
+
+    @property
+    def scenarios(self):
+        return _json_load_list(self.scenarios_json)
+
+    @property
+    def change_triggers(self):
+        return _json_load_list(self.change_triggers_json)
+
+    @property
+    def data_used(self):
+        return _json_load_list(self.data_used_json)
+
+    @property
+    def data_needed(self):
+        return _json_load_list(self.data_needed_json)
+
+
 class TelegramSettings(Base):
     """Хранит StringSession Telethon в БД (а не в файле на диске), чтобы
     авторизация переживала перезапуски Render, редеплои и пересборку

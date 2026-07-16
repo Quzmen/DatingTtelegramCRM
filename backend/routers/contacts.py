@@ -5,7 +5,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from .. import crud, schemas, models, analysis as ai, ai_gemini, config
+from .. import crud, schemas, models, analysis as ai, ai_gemini, ai_overview, config
 from ..database import get_db
 from ..telegram_service import telegram_service, TelegramAuthError
 
@@ -262,6 +262,64 @@ def get_deep_report(contact_id: int, db: Session = Depends(get_db)):
     if result is None:
         raise HTTPException(status_code=404, detail="Глубокий отчёт ещё не запускался.")
     return _deep_report_out(contact, result, contact.deep_report_at)
+
+
+def _overview_out(contact_id: int, result: dict, generated_at: datetime) -> schemas.AIOverviewOut:
+    return schemas.AIOverviewOut(
+        contact_id=contact_id,
+        generated_at=generated_at,
+        current_state=result["current_state"],
+        key_factors=result.get("key_factors", []),
+        scenarios=[schemas.AIOverviewScenarioOut(**s) for s in result.get("scenarios", [])],
+        change_triggers=result.get("change_triggers", []),
+        data_used=result.get("data_used", []),
+        data_needed=result.get("data_needed", []),
+        confidence=result.get("confidence"),
+        risk_note=result.get("risk_note"),
+        source=result.get("source", "gemini"),
+    )
+
+
+@router.post("/{contact_id}/overview", response_model=schemas.AIOverviewOut)
+async def generate_overview(contact_id: int, db: Session = Depends(get_db)):
+    """Строит новый снимок AI Overview: текущее состояние + дерево
+    возможных сценариев (см. backend/ai_overview.py). В отличие от
+    /deep-report не требует настроенного Gemini — при его отсутствии
+    честно возвращает пустой сценарий с source="local", не 400/502,
+    т.к. факты и события пользователя всё равно есть смысл увидеть."""
+    contact = _get_or_404(db, contact_id)
+
+    raw_messages: list = []
+    if contact.telegram_id:
+        try:
+            raw_messages = await telegram_service.get_messages(contact.telegram_id, limit=300)
+        except TelegramAuthError:
+            raw_messages = []
+
+    result = await ai_overview.build_overview(db, contact, raw_messages)
+    row = crud.save_ai_overview(db, contact_id, result)
+    return _overview_out(contact_id, result, row.created_at)
+
+
+@router.get("/{contact_id}/overview", response_model=schemas.AIOverviewOut)
+def get_overview(contact_id: int, db: Session = Depends(get_db)):
+    """Возвращает последний сохранённый снимок AI Overview без пересчёта."""
+    contact = _get_or_404(db, contact_id)
+    row = crud.get_latest_ai_overview(db, contact_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="AI Overview ещё не запускался.")
+    result = {
+        "current_state": row.current_state,
+        "key_factors": row.key_factors,
+        "scenarios": row.scenarios,
+        "change_triggers": row.change_triggers,
+        "data_used": row.data_used,
+        "data_needed": row.data_needed,
+        "confidence": row.confidence,
+        "risk_note": row.risk_note,
+        "source": row.source,
+    }
+    return _overview_out(contact_id, result, row.created_at)
 
 
 @router.post("/{contact_id}/apply-suggested-status", response_model=schemas.ContactDetailOut)

@@ -104,6 +104,8 @@ const API = (() => {
     analyzeContact: (id) => request(`/contacts/${id}/analyze`, { method: "POST" }),
     generateDeepReport: (id) => request(`/contacts/${id}/deep-report`, { method: "POST" }),
     getDeepReport: (id) => request(`/contacts/${id}/deep-report`),
+    generateOverview: (id) => request(`/contacts/${id}/overview`, { method: "POST" }),
+    getOverview: (id) => request(`/contacts/${id}/overview`),
     liveScore: (id, messages) =>
       request(`/contacts/${id}/live-score`, { method: "POST", body: JSON.stringify({ messages }) }),
     applySuggestedStatus: (id) => request(`/contacts/${id}/apply-suggested-status`, { method: "POST" }),

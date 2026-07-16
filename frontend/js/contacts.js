@@ -303,6 +303,8 @@ const Contacts = (() => {
 
         ${deepReportPanelHTML(c)}
 
+        ${overviewPanelHTML(c)}
+
         <div class="co-fieldgrid">
           <div class="co-field">
             <label>Имя</label>
@@ -590,6 +592,110 @@ const Contacts = (() => {
       if (activeId === c.id) patchDeepReportBox(c);
     } catch (err) {
       // 404 = отчёт ещё не запускался — это нормальное состояние, не ошибка.
+    }
+  }
+
+  // ---------- AI Overview: текущее состояние + дерево сценариев ----------
+  const overviewState = {}; // contactId -> { loading, data, attempted }
+
+  const OVERVIEW_PROB_TONE = { "высокая": "good", "средняя": "warn", "низкая": "" };
+
+  function overviewScenarioHTML(s) {
+    const tone = OVERVIEW_PROB_TONE[s.probability] || "";
+    return `
+      <div class="ov-scenario ov-scenario--${tone}">
+        <div class="ov-scenario__head">
+          <span class="ov-scenario__label">${Utils.escapeHtml(s.label)}</span>
+          <span class="ov-scenario__prob ov-scenario__prob--${tone}">${Utils.escapeHtml(s.probability)}</span>
+        </div>
+        ${s.signals && s.signals.length ? `<ul class="ov-scenario__signals">${s.signals.map((x) => `<li>${Utils.escapeHtml(x)}</li>`).join("")}</ul>` : ""}
+        ${s.likely_next_step ? `<div class="ov-scenario__next">${Utils.escapeHtml(s.likely_next_step)}</div>` : ""}
+      </div>`;
+  }
+
+  function overviewInner(c, st) {
+    const head = (rightBtn) => `
+      <div class="ai-panel__head">
+        <div class="ai-panel__title">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg>
+          AI Overview <span class="ai-panel__source">${st.data && st.data.source === "local" ? "локально" : "Gemini"}</span>
+        </div>
+        ${rightBtn || ""}
+      </div>`;
+
+    if (st.loading) {
+      return `${head("")}<div class="ai-panel__empty">Собираем факты, переписку и прошлые анализы — обычно 5-15 секунд…</div>`;
+    }
+
+    if (st.data) {
+      const r = st.data;
+      const refreshBtn = `<button class="btn btn--icon" id="btnOverviewRefresh" title="Пересчитать" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+      </button>`;
+      return `
+        ${head(refreshBtn)}
+        <div class="ai-panel__summary">${Utils.escapeHtml(r.current_state || "")}</div>
+        ${r.risk_note ? `<div class="ov-risk">${Utils.escapeHtml(r.risk_note)}</div>` : ""}
+        ${drList("Ключевые факторы", r.key_factors, "good")}
+        ${r.scenarios && r.scenarios.length ? `<div class="ov-scenarios">${r.scenarios.map(overviewScenarioHTML).join("")}</div>` : `<div class="ai-panel__empty">Недостаточно данных, чтобы построить сценарии.</div>`}
+        ${drList("Что может изменить направление", r.change_triggers, "good")}
+        ${drList("Какие данные повысили бы точность", r.data_needed, "bad")}
+        <div class="ai-panel__row"><span class="ai-panel__label">Использованные данные</span><span class="ai-panel__value">${r.data_used && r.data_used.length ? Utils.escapeHtml(r.data_used.join(", ")) : "\u2014"}</span></div>
+        <div class="ai-panel__analyzed">Снимок от ${Utils.formatDateTime(r.generated_at)}${r.confidence ? " · уверенность: " + Utils.escapeHtml(r.confidence) : ""}</div>
+      `;
+    }
+
+    return `
+      ${head("")}
+      <div class="ai-panel__empty">Картина ситуации и возможные сценарии развития — по фактам, событиям, переписке и прошлым анализам.</div>
+      <button class="btn btn--primary btn--sm" id="btnOverviewRun" type="button">Построить AI Overview</button>
+    `;
+  }
+
+  function overviewPanelHTML(c) {
+    const st = overviewState[c.id] || { loading: false, data: null, attempted: false };
+    return `<div class="ai-panel" id="overviewBox">${overviewInner(c, st)}</div>`;
+  }
+
+  function patchOverviewBox(c) {
+    const box = document.getElementById("overviewBox");
+    if (!box) return;
+    const st = overviewState[c.id] || { loading: false, data: null, attempted: false };
+    box.innerHTML = overviewInner(c, st);
+    wireOverviewButtons(c);
+  }
+
+  function wireOverviewButtons(c) {
+    const btnRun = document.getElementById("btnOverviewRun");
+    if (btnRun) btnRun.addEventListener("click", () => runOverview(c));
+    const btnRefresh = document.getElementById("btnOverviewRefresh");
+    if (btnRefresh) btnRefresh.addEventListener("click", () => runOverview(c));
+  }
+
+  async function runOverview(c) {
+    overviewState[c.id] = { ...(overviewState[c.id] || {}), loading: true, attempted: true };
+    patchOverviewBox(c);
+    try {
+      const data = await API.generateOverview(c.id);
+      overviewState[c.id] = { loading: false, data, attempted: true };
+    } catch (err) {
+      overviewState[c.id] = { loading: false, data: (overviewState[c.id] || {}).data || null, attempted: true };
+      Utils.toast(err.message || "Не удалось построить AI Overview");
+    }
+    if (activeId === c.id) patchOverviewBox(c);
+  }
+
+  // Как и с deep-report: тихо подгружаем последний сохранённый снимок при
+  // первом открытии карточки в этой сессии, без обращения к Gemini.
+  async function loadSavedOverviewIfNeeded(c) {
+    if (overviewState[c.id] && overviewState[c.id].attempted) return;
+    overviewState[c.id] = { loading: false, data: null, attempted: true };
+    try {
+      const data = await API.getOverview(c.id);
+      overviewState[c.id] = { loading: false, data, attempted: true };
+      if (activeId === c.id) patchOverviewBox(c);
+    } catch (err) {
+      // 404 = ещё не запускался — нормальное состояние, не ошибка.
     }
   }
 
@@ -1005,6 +1111,9 @@ const Contacts = (() => {
 
     wireDeepReportButtons(c);
     loadSavedDeepReportIfNeeded(c);
+
+    wireOverviewButtons(c);
+    loadSavedOverviewIfNeeded(c);
 
     const btnApplySuggested = document.getElementById("btnApplySuggestedStatus");
     if (btnApplySuggested) btnApplySuggested.addEventListener("click", () => applySuggestedStatus(c.id));
