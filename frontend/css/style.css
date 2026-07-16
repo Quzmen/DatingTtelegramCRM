@@ -687,6 +687,13 @@ ul{ list-style:none; margin:0; padding:0; }
   outline: 2px solid var(--primary);
   outline-offset:1px;
 }
+/* .btn had no [disabled] styling at all — button.disabled = true was
+   visually identical to enabled (same color, same cursor:pointer),
+   so the only feedback during an async action was a text swap ("Считаю…"),
+   easy to miss entirely if the request is quick. */
+.btn:disabled{ opacity:.55; cursor:not-allowed; }
+.btn:disabled:hover{ background: var(--surface); }
+.btn--primary:disabled:hover{ background: var(--primary); }
 
 .modal-overlay{
   position:fixed; inset:0;

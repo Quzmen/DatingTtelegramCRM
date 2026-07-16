@@ -57,8 +57,14 @@ const AIInsights = (() => {
       btn.disabled = true;
       btn.textContent = "Считаю…";
       try {
-        await API.aiRefreshPatterns();
+        const patterns = await API.aiRefreshPatterns();
         await loadPatterns();
+        // Пересчёт мог реально выполниться и просто не найти
+        // закономерностей (см. backend/ai_personal_engine.py —
+        // analyze_patterns() требует минимум 5 записей в "Памяти").
+        // Без этого тоста результат "запрос прошёл, но пусто" и
+        // "кнопка ничего не сделала" выглядели на экране одинаково.
+        Utils.toast(patterns.length ? "Паттерны обновлены" : "Обновлено — пока недостаточно данных");
       } catch (err) {
         Utils.toast(err.message || "Не удалось пересчитать паттерны", "error");
       } finally {
@@ -218,7 +224,7 @@ const AIInsights = (() => {
     const list = document.getElementById("aiPatternList");
     const patterns = await API.aiGetPatterns();
     if (patterns.length === 0) {
-      list.innerHTML = `<div class="ai-empty">Паттерны ещё не посчитаны — нажмите «Пересчитать паттерны».</div>`;
+      list.innerHTML = `<div class="ai-empty">Паттерны ещё не посчитаны — нажмите «Пересчитать паттерны».<br>Нужно минимум 5 записей в «Памяти», чтобы найти закономерность.</div>`;
       return;
     }
     list.innerHTML = patterns.map((p) => `
