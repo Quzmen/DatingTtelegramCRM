@@ -299,11 +299,7 @@ const Contacts = (() => {
           </div>
         </div>
 
-        ${aiPanelHTML(c)}
-
-        ${deepReportPanelHTML(c)}
-
-        ${overviewPanelHTML(c)}
+        ${combinedAiPanelHTML(c)}
 
         <div class="co-fieldgrid">
           <div class="co-field">
@@ -405,24 +401,18 @@ const Contacts = (() => {
     local: "локально",
   };
 
-  function aiPanelHTML(c) {
+  function ciSectionHTML(c) {
     const badge = Utils.aiScoreBadge(c.analyzed_at ? c.interest_score : null);
     const hasSuggestion = c.analyzed_at && c.suggested_status && c.suggested_status !== c.status;
     const sourceLabel = AI_SOURCE_LABELS[c.ai_source] || "локально";
     const isLlm = c.analyzed_at && c.ai_source && c.ai_source !== "local";
     return `
-      <div class="ai-panel">
-        <div class="ai-panel__head">
-          <div class="ai-panel__title">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
-            Contact Intelligence
-            ${c.analyzed_at ? `<span class="ai-panel__source" title="${isLlm ? "Summary и следующее действие сгенерированы внешним API" : "Посчитано локально, без внешних сервисов"}">${sourceLabel}</span>` : ""}
-          </div>
-          <button class="btn btn--icon" id="btnAnalyzeContact" title="Обновить AI-анализ" type="button">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
-          </button>
+      <div class="ai-combined__section">
+        <div class="ai-combined__label">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
+          Contact Intelligence
+          ${c.analyzed_at ? `<span class="ai-panel__source" title="${isLlm ? "Summary и следующее действие сгенерированы внешним API" : "Посчитано локально, без внешних сервисов"}">${sourceLabel}</span>` : ""}
         </div>
-
         ${c.analyzed_at ? `
         <div class="ai-panel__score">
           <span class="ai-badge ai-badge--${badge.cls} ai-badge--lg">${c.interest_score}<small>/100</small></span>
@@ -445,24 +435,9 @@ const Contacts = (() => {
           <button class="btn btn--sm" id="btnCopySuggestedReply" type="button">Скопировать</button>
         </div>` : ""}
         ` : `
-        <div class="ai-panel__empty">Анализ ещё не запускался. Нажмите на значок обновления, чтобы оценить интерес по переписке.</div>
+        <div class="ai-panel__empty">Анализ ещё не запускался. Нажмите «Обновить AI-анализ» вверху, чтобы оценить интерес по переписке.</div>
         `}
       </div>`;
-  }
-
-  async function runAnalysis(contactId) {
-    const btn = document.getElementById("btnAnalyzeContact");
-    if (btn) btn.classList.add("is-spinning");
-    try {
-      await API.analyzeContact(contactId);
-      const fresh = await API.getContact(contactId);
-      if (activeId === contactId) renderDetail(fresh);
-      Utils.toast("Анализ обновлён");
-    } catch (err) {
-      Utils.toast(err.message || "Не удалось выполнить анализ");
-    } finally {
-      if (btn) btn.classList.remove("is-spinning");
-    }
   }
 
   // ---------- Глубокий AI-отчёт (требует Gemini) ----------
@@ -490,93 +465,54 @@ const Contacts = (() => {
       </div>`;
   }
 
-  function deepReportInner(c, st) {
-    const head = (rightBtn) => `
-      <div class="ai-panel__head">
-        <div class="ai-panel__title">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
-          Глубокий AI-отчёт <span class="ai-panel__source">Gemini</span>
-        </div>
-        ${rightBtn || ""}
+  function drSectionHTML(c, st) {
+    const label = `
+      <div class="ai-combined__label">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
+        Глубокий AI-отчёт <span class="ai-panel__source">Gemini</span>
       </div>`;
 
     if (st.loading) {
-      return `${head("")}<div class="ai-panel__empty">Gemini разбирает переписку — обычно занимает 5-15 секунд…</div>`;
+      return `<div class="ai-combined__section">${label}<div class="ai-panel__empty">Gemini разбирает переписку — обычно занимает 5-15 секунд…</div></div>`;
     }
 
     if (st.data) {
       const r = st.data;
-      const refreshBtn = `<button class="btn btn--icon" id="btnDeepReportRefresh" title="Пересчитать" type="button">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
-      </button>`;
       return `
-        ${head(refreshBtn)}
-        <div class="ai-panel__score">
-          <span class="ai-badge ai-badge--${Utils.aiScoreBadge(r.interest_score).cls} ai-badge--lg">${r.interest_score}<small>/100</small></span>
-          <div class="ai-panel__score-meta">
-            <div class="ai-panel__category">${Utils.escapeHtml(r.category || "")}${r.trend ? " · " + Utils.escapeHtml(r.trend) : ""}</div>
-            <div class="ai-panel__analyzed">Отчёт от ${Utils.formatDateTime(r.generated_at)}</div>
+        <div class="ai-combined__section">
+          ${label}
+          <div class="ai-panel__score">
+            <span class="ai-badge ai-badge--${Utils.aiScoreBadge(r.interest_score).cls} ai-badge--lg">${r.interest_score}<small>/100</small></span>
+            <div class="ai-panel__score-meta">
+              <div class="ai-panel__category">${Utils.escapeHtml(r.category || "")}${r.trend ? " · " + Utils.escapeHtml(r.trend) : ""}</div>
+              <div class="ai-panel__analyzed">Отчёт от ${Utils.formatDateTime(r.generated_at)}</div>
+            </div>
           </div>
-        </div>
-        <div class="dr-bars">
-          ${drBar("Инициатива", r.initiative)}
-          ${drBar("Вложенность в общение", r.investment)}
-          ${drBar("Кто тащит диалог", r.conversation_driver)}
-        </div>
-        <div class="dr-probs">
-          <span class="dr-prob" title="Вероятность встречи, если пригласить сейчас">Встреча: <b>${r.meeting_probability}%</b></span>
-          <span class="dr-prob" title="Насколько уместно сейчас предложить встречу">Уместно позвать: <b>${r.date_invite_probability}%</b></span>
-          <span class="dr-prob" title="Вероятность, что собеседник перестанет отвечать">Риск игнора: <b>${r.ghost_probability}%</b></span>
-          <span class="dr-prob" title="Насколько сильно вы давите (частые сообщения, повторные вопросы)">Ваше давление: <b>${r.pressure_score}%</b></span>
-        </div>
-        ${drList("Зелёные флаги", r.green_flags, "good")}
-        ${drList("Красные флаги", r.red_flags, "bad")}
-        ${drList("Ваши ошибки в последних сообщениях", r.mistakes, "bad")}
-        ${drList("Рекомендации", r.improvements, "good")}
-        <div class="ai-panel__row"><span class="ai-panel__label">Следующий шаг</span><span class="ai-panel__value">${Utils.escapeHtml(r.next_action || "\u2014")}</span></div>
-        ${r.reasoning ? `<div class="ai-panel__summary">${Utils.escapeHtml(r.reasoning)}</div>` : ""}
-      `;
+          <div class="dr-bars">
+            ${drBar("Инициатива", r.initiative)}
+            ${drBar("Вложенность в общение", r.investment)}
+            ${drBar("Кто тащит диалог", r.conversation_driver)}
+          </div>
+          <div class="dr-probs">
+            <span class="dr-prob" title="Вероятность встречи, если пригласить сейчас">Встреча: <b>${r.meeting_probability}%</b></span>
+            <span class="dr-prob" title="Насколько уместно сейчас предложить встречу">Уместно позвать: <b>${r.date_invite_probability}%</b></span>
+            <span class="dr-prob" title="Вероятность, что собеседник перестанет отвечать">Риск игнора: <b>${r.ghost_probability}%</b></span>
+            <span class="dr-prob" title="Насколько сильно вы давите (частые сообщения, повторные вопросы)">Ваше давление: <b>${r.pressure_score}%</b></span>
+          </div>
+          ${drList("Зелёные флаги", r.green_flags, "good")}
+          ${drList("Красные флаги", r.red_flags, "bad")}
+          ${drList("Ваши ошибки в последних сообщениях", r.mistakes, "bad")}
+          ${drList("Рекомендации", r.improvements, "good")}
+          <div class="ai-panel__row"><span class="ai-panel__label">Следующий шаг</span><span class="ai-panel__value">${Utils.escapeHtml(r.next_action || "\u2014")}</span></div>
+          ${r.reasoning ? `<div class="ai-panel__summary">${Utils.escapeHtml(r.reasoning)}</div>` : ""}
+        </div>`;
     }
 
     return `
-      ${head("")}
-      <div class="ai-panel__empty">Развёрнутый разбор: инициатива, вложенность, флирт, красные/зелёные флаги, ваши ошибки и рекомендации — по всей переписке.</div>
-      <button class="btn btn--primary btn--sm" id="btnDeepReportRun" type="button">Сгенерировать отчёт</button>
-    `;
-  }
-
-  function deepReportPanelHTML(c) {
-    if (!c.telegram_id) return "";
-    const st = deepReportState[c.id] || { loading: false, data: null, attempted: false };
-    return `<div class="ai-panel" id="deepReportBox">${deepReportInner(c, st)}</div>`;
-  }
-
-  function patchDeepReportBox(c) {
-    const box = document.getElementById("deepReportBox");
-    if (!box) return;
-    const st = deepReportState[c.id] || { loading: false, data: null, attempted: false };
-    box.innerHTML = deepReportInner(c, st);
-    wireDeepReportButtons(c);
-  }
-
-  function wireDeepReportButtons(c) {
-    const btnRun = document.getElementById("btnDeepReportRun");
-    if (btnRun) btnRun.addEventListener("click", () => runDeepReport(c));
-    const btnRefresh = document.getElementById("btnDeepReportRefresh");
-    if (btnRefresh) btnRefresh.addEventListener("click", () => runDeepReport(c));
-  }
-
-  async function runDeepReport(c) {
-    deepReportState[c.id] = { ...(deepReportState[c.id] || {}), loading: true, attempted: true };
-    patchDeepReportBox(c);
-    try {
-      const data = await API.generateDeepReport(c.id);
-      deepReportState[c.id] = { loading: false, data, attempted: true };
-    } catch (err) {
-      deepReportState[c.id] = { loading: false, data: (deepReportState[c.id] || {}).data || null, attempted: true };
-      Utils.toast(err.message || "Не удалось построить отчёт");
-    }
-    if (activeId === c.id) patchDeepReportBox(c);
+      <div class="ai-combined__section">
+        ${label}
+        <div class="ai-panel__empty">${st.skipReason ? Utils.escapeHtml(st.skipReason) : "Развёрнутый разбор: инициатива, вложенность, флирт, красные/зелёные флаги, ваши ошибки и рекомендации — по всей переписке. Нажмите «Обновить AI-анализ» вверху."}</div>
+      </div>`;
   }
 
   // При первом открытии карточки в этой сессии тихо проверяем, нет ли уже
@@ -589,9 +525,23 @@ const Contacts = (() => {
     try {
       const data = await API.getDeepReport(c.id);
       deepReportState[c.id] = { loading: false, data, attempted: true };
-      if (activeId === c.id) patchDeepReportBox(c);
+      if (activeId === c.id) patchCombinedAiBox(c);
     } catch (err) {
       // 404 = отчёт ещё не запускался — это нормальное состояние, не ошибка.
+    }
+  }
+
+  // Как и с deep-report: тихо подгружаем последний сохранённый снимок при
+  // первом открытии карточки в этой сессии, без обращения к Gemini.
+  async function loadSavedOverviewIfNeeded(c) {
+    if (overviewState[c.id] && overviewState[c.id].attempted) return;
+    overviewState[c.id] = { loading: false, data: null, attempted: true };
+    try {
+      const data = await API.getOverview(c.id);
+      overviewState[c.id] = { loading: false, data, attempted: true };
+      if (activeId === c.id) patchCombinedAiBox(c);
+    } catch (err) {
+      // 404 = ещё не запускался — нормальное состояние, не ошибка.
     }
   }
 
@@ -613,89 +563,107 @@ const Contacts = (() => {
       </div>`;
   }
 
-  function overviewInner(c, st) {
-    const head = (rightBtn) => `
-      <div class="ai-panel__head">
-        <div class="ai-panel__title">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg>
-          AI Overview <span class="ai-panel__source">${st.data && st.data.source === "local" ? "локально" : "Gemini"}</span>
-        </div>
-        ${rightBtn || ""}
+  function ovSectionHTML(c, st) {
+    const label = `
+      <div class="ai-combined__label">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg>
+        AI Overview <span class="ai-panel__source">${st.data && st.data.source === "local" ? "локально" : "Gemini"}</span>
       </div>`;
 
     if (st.loading) {
-      return `${head("")}<div class="ai-panel__empty">Собираем факты, переписку и прошлые анализы — обычно 5-15 секунд…</div>`;
+      return `<div class="ai-combined__section">${label}<div class="ai-panel__empty">Сканируем переписку на факты и планы, собираем прошлые анализы — обычно 5-15 секунд…</div></div>`;
     }
 
     if (st.data) {
       const r = st.data;
-      const refreshBtn = `<button class="btn btn--icon" id="btnOverviewRefresh" title="Пересчитать" type="button">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
-      </button>`;
       return `
-        ${head(refreshBtn)}
-        <div class="ai-panel__summary">${Utils.escapeHtml(r.current_state || "")}</div>
-        ${r.risk_note ? `<div class="ov-risk">${Utils.escapeHtml(r.risk_note)}</div>` : ""}
-        ${drList("Ключевые факторы", r.key_factors, "good")}
-        ${r.scenarios && r.scenarios.length ? `<div class="ov-scenarios">${r.scenarios.map(overviewScenarioHTML).join("")}</div>` : `<div class="ai-panel__empty">Недостаточно данных, чтобы построить сценарии.</div>`}
-        ${drList("Что может изменить направление", r.change_triggers, "good")}
-        ${drList("Какие данные повысили бы точность", r.data_needed, "bad")}
-        <div class="ai-panel__row"><span class="ai-panel__label">Использованные данные</span><span class="ai-panel__value">${r.data_used && r.data_used.length ? Utils.escapeHtml(r.data_used.join(", ")) : "\u2014"}</span></div>
-        <div class="ai-panel__analyzed">Снимок от ${Utils.formatDateTime(r.generated_at)}${r.confidence ? " · уверенность: " + Utils.escapeHtml(r.confidence) : ""}</div>
-      `;
+        <div class="ai-combined__section">
+          ${label}
+          ${r.new_facts_count ? `<div class="ai-combined__facts">Найдено в переписке и сохранено в Память: ${r.new_facts_count} ${Utils.escapeHtml(factsWord(r.new_facts_count))}</div>` : ""}
+          <div class="ai-panel__summary">${Utils.escapeHtml(r.current_state || "")}</div>
+          ${r.risk_note ? `<div class="ov-risk">${Utils.escapeHtml(r.risk_note)}</div>` : ""}
+          ${drList("Ключевые факторы", r.key_factors, "good")}
+          ${r.scenarios && r.scenarios.length ? `<div class="ov-scenarios">${r.scenarios.map(overviewScenarioHTML).join("")}</div>` : `<div class="ai-panel__empty">Недостаточно данных, чтобы построить сценарии.</div>`}
+          ${drList("Что может изменить направление", r.change_triggers, "good")}
+          ${drList("Какие данные повысили бы точность", r.data_needed, "bad")}
+          <div class="ai-panel__row"><span class="ai-panel__label">Использованные данные</span><span class="ai-panel__value">${r.data_used && r.data_used.length ? Utils.escapeHtml(r.data_used.join(", ")) : "\u2014"}</span></div>
+          <div class="ai-panel__analyzed">Снимок от ${Utils.formatDateTime(r.generated_at)}${r.confidence ? " · уверенность: " + Utils.escapeHtml(r.confidence) : ""}</div>
+        </div>`;
     }
 
     return `
-      ${head("")}
-      <div class="ai-panel__empty">Картина ситуации и возможные сценарии развития — по фактам, событиям, переписке и прошлым анализам.</div>
-      <button class="btn btn--primary btn--sm" id="btnOverviewRun" type="button">Построить AI Overview</button>
+      <div class="ai-combined__section">
+        ${label}
+        <div class="ai-panel__empty">Картина ситуации и возможные сценарии развития — по фактам, событиям, переписке (которую AI Overview сканирует сам) и прошлым анализам. Нажмите «Обновить AI-анализ» вверху.</div>
+      </div>`;
+  }
+
+  function factsWord(n) {
+    const mod10 = n % 10, mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return "факт";
+    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return "факта";
+    return "фактов";
+  }
+
+  // ---------- Единый блок AI-анализа: Contact Intelligence + Глубокий
+  // AI-отчёт + AI Overview за одну кнопку и один поход в Telegram/Gemini
+  // (см. POST /{contact_id}/full-scan в backend/routers/contacts.py). ----------
+  const combinedLoading = {}; // contactId -> bool, пока идёт полный скан
+
+  function combinedAiInner(c) {
+    const drSt = deepReportState[c.id] || { loading: false, data: null, attempted: false };
+    const ovSt = overviewState[c.id] || { loading: false, data: null, attempted: false };
+    const isLoading = !!combinedLoading[c.id];
+
+    return `
+      <div class="ai-panel__head">
+        <div class="ai-panel__title">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
+          AI-анализ
+        </div>
+        <button class="btn btn--icon ${isLoading ? "is-spinning" : ""}" id="btnFullAiScan" title="Обновить AI-анализ: Contact Intelligence, глубокий отчёт и AI Overview за один раз" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+        </button>
+      </div>
+
+      ${ciSectionHTML(c)}
+      ${c.telegram_id ? `<div class="ai-combined__divider"><span>Глубокий AI-отчёт</span></div>${drSectionHTML(c, isLoading ? { ...drSt, loading: true } : drSt)}` : ""}
+      <div class="ai-combined__divider"><span>AI Overview</span></div>
+      ${ovSectionHTML(c, isLoading ? { ...ovSt, loading: true } : ovSt)}
     `;
   }
 
-  function overviewPanelHTML(c) {
-    const st = overviewState[c.id] || { loading: false, data: null, attempted: false };
-    return `<div class="ai-panel" id="overviewBox">${overviewInner(c, st)}</div>`;
+  function combinedAiPanelHTML(c) {
+    return `<div class="ai-panel ai-panel--combined" id="combinedAiBox">${combinedAiInner(c)}</div>`;
   }
 
-  function patchOverviewBox(c) {
-    const box = document.getElementById("overviewBox");
+  function patchCombinedAiBox(c) {
+    const box = document.getElementById("combinedAiBox");
     if (!box) return;
-    const st = overviewState[c.id] || { loading: false, data: null, attempted: false };
-    box.innerHTML = overviewInner(c, st);
-    wireOverviewButtons(c);
+    box.innerHTML = combinedAiInner(c);
+    wireCombinedAiButtons(c);
   }
 
-  function wireOverviewButtons(c) {
-    const btnRun = document.getElementById("btnOverviewRun");
-    if (btnRun) btnRun.addEventListener("click", () => runOverview(c));
-    const btnRefresh = document.getElementById("btnOverviewRefresh");
-    if (btnRefresh) btnRefresh.addEventListener("click", () => runOverview(c));
+  function wireCombinedAiButtons(c) {
+    const btn = document.getElementById("btnFullAiScan");
+    if (btn) btn.addEventListener("click", () => runFullScan(c));
   }
 
-  async function runOverview(c) {
-    overviewState[c.id] = { ...(overviewState[c.id] || {}), loading: true, attempted: true };
-    patchOverviewBox(c);
+  async function runFullScan(c) {
+    combinedLoading[c.id] = true;
+    patchCombinedAiBox(c);
     try {
-      const data = await API.generateOverview(c.id);
-      overviewState[c.id] = { loading: false, data, attempted: true };
+      const data = await API.fullAiScan(c.id);
+      deepReportState[c.id] = { loading: false, data: data.deep_report || null, attempted: true, skipReason: data.deep_report_skipped_reason || null };
+      overviewState[c.id] = { loading: false, data: data.overview, attempted: true };
+      combinedLoading[c.id] = false;
+      const fresh = await API.getContact(c.id);
+      if (activeId === c.id) renderDetail(fresh);
+      Utils.toast(data.overview.new_facts_count ? `Анализ обновлён · найдено новых фактов: ${data.overview.new_facts_count}` : "Анализ обновлён");
     } catch (err) {
-      overviewState[c.id] = { loading: false, data: (overviewState[c.id] || {}).data || null, attempted: true };
-      Utils.toast(err.message || "Не удалось построить AI Overview");
-    }
-    if (activeId === c.id) patchOverviewBox(c);
-  }
-
-  // Как и с deep-report: тихо подгружаем последний сохранённый снимок при
-  // первом открытии карточки в этой сессии, без обращения к Gemini.
-  async function loadSavedOverviewIfNeeded(c) {
-    if (overviewState[c.id] && overviewState[c.id].attempted) return;
-    overviewState[c.id] = { loading: false, data: null, attempted: true };
-    try {
-      const data = await API.getOverview(c.id);
-      overviewState[c.id] = { loading: false, data, attempted: true };
-      if (activeId === c.id) patchOverviewBox(c);
-    } catch (err) {
-      // 404 = ещё не запускался — нормальное состояние, не ошибка.
+      combinedLoading[c.id] = false;
+      if (activeId === c.id) patchCombinedAiBox(c);
+      Utils.toast(err.message || "Не удалось выполнить AI-анализ");
     }
   }
 
@@ -1106,13 +1074,8 @@ const Contacts = (() => {
   }
 
   function wireDetailEvents(c) {
-    const btnAnalyze = document.getElementById("btnAnalyzeContact");
-    if (btnAnalyze) btnAnalyze.addEventListener("click", () => runAnalysis(c.id));
-
-    wireDeepReportButtons(c);
+    wireCombinedAiButtons(c);
     loadSavedDeepReportIfNeeded(c);
-
-    wireOverviewButtons(c);
     loadSavedOverviewIfNeeded(c);
 
     const btnApplySuggested = document.getElementById("btnApplySuggestedStatus");

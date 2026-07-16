@@ -154,6 +154,15 @@ def choose_decision(decision_id: int, data: schemas.AIDecisionChooseIn, db: Sess
     return _decision_out(row)
 
 
+@router.delete("/decisions/{decision_id}", status_code=204)
+def delete_decision(decision_id: int, db: Session = Depends(get_db)):
+    row = crud.get_decision(db, decision_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Решение не найдено")
+    crud.delete_decision(db, row)
+    return None
+
+
 # ---------------------------------------------------------------
 # AI Insights Dashboard (aggregate)
 # ---------------------------------------------------------------

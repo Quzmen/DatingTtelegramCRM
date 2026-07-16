@@ -322,6 +322,85 @@ def get_overview(contact_id: int, db: Session = Depends(get_db)):
     return _overview_out(contact_id, result, row.created_at)
 
 
+@router.post("/{contact_id}/full-scan", response_model=schemas.FullAiScanOut)
+async def full_ai_scan(contact_id: int, db: Session = Depends(get_db)):
+    """Единая кнопка "Полный AI-анализ": запускает Contact Intelligence,
+    Глубокий AI-отчёт и AI Overview за один проход — с одним походом в
+    Telegram за перепиской вместо трёх (каждый из отдельных эндпоинтов
+    /analyze, /deep-report, /overview делал свой собственный запрос).
+
+    Глубокий отчёт — единственная часть без локального аналога: если
+    Gemini не настроена или переписки недостаточно, он просто
+    пропускается (deep_report=None, причина — в deep_report_skipped_reason),
+    а не роняет весь запрос, в отличие от отдельного эндпоинта /deep-report.
+    """
+    contact = _get_or_404(db, contact_id)
+
+    raw_messages: list = []
+    if contact.telegram_id:
+        try:
+            raw_messages = await telegram_service.get_messages(contact.telegram_id, limit=300)
+        except TelegramAuthError:
+            raw_messages = []
+
+    messages = ai.normalize_messages(raw_messages)
+
+    # 1. Contact Intelligence (всегда есть локальный результат).
+    analysis_result = ai.analyze(contact, messages)
+    llm_result = None
+    if config.AI_PROVIDER == "gemini":
+        llm_result = await ai_gemini.enrich(contact, messages, analysis_result)
+    if llm_result:
+        analysis_result["ai_summary"] = llm_result["ai_summary"]
+        analysis_result["next_action"] = llm_result["next_action"]
+        analysis_result["suggested_reply"] = llm_result["suggested_reply"]
+        analysis_result["ai_source"] = config.AI_PROVIDER
+    crud.save_analysis(db, contact, analysis_result)
+    crud.add_interaction(
+        db, contact.id,
+        schemas.InteractionCreate(
+            note=f"AI-анализ: {analysis_result['interest_category']} ({analysis_result['interest_score']}/100). "
+                 f"{analysis_result['ai_summary']}",
+            event_type="ai_analysis",
+        ),
+    )
+    analysis_out = _analysis_out(contact, analysis_result)
+
+    # 2. Глубокий AI-отчёт — опциональный, пропускается без падения всего запроса.
+    deep_report_out = None
+    deep_report_skip_reason = None
+    if config.AI_PROVIDER != "gemini" or not config.GEMINI_API_KEY:
+        deep_report_skip_reason = "Требует настроенный Gemini (AI_PROVIDER=gemini и GEMINI_API_KEY)."
+    elif not messages:
+        deep_report_skip_reason = "Недостаточно переписки для глубокого анализа."
+    else:
+        try:
+            dr_result = await ai_gemini.generate_deep_report(contact, messages, analysis_result)
+        except ai_gemini.GeminiError as exc:
+            deep_report_skip_reason = f"Gemini не ответила: {exc}"
+            dr_result = None
+        if dr_result is None and deep_report_skip_reason is None:
+            deep_report_skip_reason = "Недостаточно переписки для глубокого анализа."
+        if dr_result is not None:
+            crud.save_deep_report(db, contact, dr_result)
+            deep_report_out = _deep_report_out(contact, dr_result, contact.deep_report_at)
+
+    # 3. AI Overview — сам сканирует хвост переписки на факты/планы и
+    # сохраняет их в Память контакта (см. ai_overview._scan_chat_for_facts),
+    # затем строит картину состояния + сценарии по всему собранному.
+    overview_result = await ai_overview.build_overview(db, contact, raw_messages)
+    overview_row = crud.save_ai_overview(db, contact_id, overview_result)
+    overview_out = _overview_out(contact_id, overview_result, overview_row.created_at)
+    overview_out.new_facts_count = overview_result.get("new_facts_count", 0)
+
+    return schemas.FullAiScanOut(
+        analysis=analysis_out,
+        deep_report=deep_report_out,
+        overview=overview_out,
+        deep_report_skipped_reason=deep_report_skip_reason,
+    )
+
+
 @router.post("/{contact_id}/apply-suggested-status", response_model=schemas.ContactDetailOut)
 def apply_suggested_status(contact_id: int, db: Session = Depends(get_db)):
     contact = _get_or_404(db, contact_id)

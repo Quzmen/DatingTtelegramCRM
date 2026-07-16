@@ -156,11 +156,19 @@ const AIInsights = (() => {
 
     // Decision list delegation: choose option
     document.getElementById("aiDecisionList").addEventListener("click", async (e) => {
-      const btn = e.target.closest("[data-choose-decision]");
-      if (!btn) return;
-      await API.aiChooseDecision(Number(btn.dataset.chooseDecision), btn.dataset.chooseLabel);
-      cachedDecisions = null;
-      await loadDecisions();
+      const chooseBtn = e.target.closest("[data-choose-decision]");
+      if (chooseBtn) {
+        await API.aiChooseDecision(Number(chooseBtn.dataset.chooseDecision), chooseBtn.dataset.chooseLabel);
+        cachedDecisions = null;
+        await loadDecisions();
+        return;
+      }
+      const deleteBtn = e.target.closest("[data-delete-decision]");
+      if (deleteBtn) {
+        await API.aiDeleteDecision(Number(deleteBtn.dataset.deleteDecision));
+        cachedDecisions = null;
+        await loadDecisions();
+      }
     });
   }
 
@@ -414,7 +422,10 @@ const AIInsights = (() => {
   function decisionCardHTML(d) {
     return `
       <div class="aiw-dcard">
-        <div class="aiw-dcard__situation">${Utils.escapeHtml(d.situation)}</div>
+        <div class="aiw-dcard__head">
+          <div class="aiw-dcard__situation">${Utils.escapeHtml(d.situation)}</div>
+          <button class="aiw-dcard__delete" data-delete-decision="${d.id}" title="Удалить">×</button>
+        </div>
         ${d.options.map((o) => `
           <div class="aiw-dcard__option ${d.chosen_option === o.label ? "is-chosen" : ""}">
             <div class="aiw-dcard__option-head">

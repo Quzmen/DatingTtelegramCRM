@@ -117,6 +117,126 @@ OVERVIEW_SYSTEM_PROMPT = """Ты — аналитический модуль AI 
 }"""
 
 
+# ---- Автосканирование чата: факты/планы/договорённости → AI Memory ----
+#
+# До сборки картины AI Overview сам вычитывает хвост переписки и достаёт из
+# него конкретику (кто/что предложил, дата и место встречи, что обещали
+# друг другу) — так же, как это делает Event Extraction Service
+# (ai_personal_engine.extract_memory) для заметок пользователя, но с
+# промптом, заточенным под диалог с двумя участниками, а не монолог.
+# Найденное сохраняется как обычные AIMemoryItem (source="ai_overview_scan"),
+# поэтому попадает и в общий Таймлайн/Память, и в следующий гейзер контекста
+# AI Overview — без этого шага сценарии строились бы только по тому, что
+# пользователь успел занести руками.
+CHAT_FACTS_SYSTEM_PROMPT = """Ты — модуль извлечения фактов внутри AI \
+Overview локальной CRM для личных знакомств из Telegram. Тебе дают хвост \
+переписки пользователя ("Я") с одним контактом. Достань из неё конкретные \
+факты, которые стоит запомнить о ситуации с этим контактом.
+
+Ищи только то, что реально сказано в тексте:
+- договорённости о встрече (дата/время/место, если названы или ясно \
+следуют из контекста, например "сегодня после работы"),
+- обещания любой из сторон ("напишу завтра", "пришлю фото"),
+- планы на будущее без точной даты,
+- явно названные предпочтения одной из сторон (что нравится/не нравится),
+- другие факты о ситуации, важные для понимания, куда всё движется.
+
+Строго соблюдай:
+- Не додумывай ничего, чего нет в тексте дословно или очевидным следствием.
+- Не включай мелкие бытовые реплики без содержательной ценности \
+("привет", "как дела", смайлики) — только то, что реально стоит запомнить.
+- Если ничего подходящего нет — верни пустой список items, это нормальный \
+результат, не пытайся найти хоть что-то через силу.
+- Не более 8 фактов за раз — только самое важное из последних сообщений.
+
+Для каждого факта:
+- kind: "event" (разовое событие с датой/временем), "commitment" \
+(обещание/договорённость), "plan" (план без точной даты), "preference" \
+(предпочтение одной из сторон), "fact" (прочее важное).
+- title: короткая (до 80 символов) формулировка на русском.
+- details: 1 предложение уточнения, если нужно, иначе пустая строка.
+- related_at: дата И время в ISO 8601 (YYYY-MM-DDTHH:MM:SS), если в \
+переписке есть хоть какая-то временная привязка (сегодня — {today}); время \
+суток без точного часа переводи так: утро → 09:00, день → 13:00, \
+вечер → 19:00, ночь → 22:00. Если временной привязки нет вообще — null.
+- importance: число 0..1.
+
+Ответь СТРОГО валидным JSON без markdown:
+{"items": [{"kind": "...", "title": "...", "details": "...", \
+"related_at": null, "importance": 0.5}]}"""
+
+
+def _parse_chat_facts(raw, contact_name: str) -> List[Dict]:
+    if not isinstance(raw, list):
+        return []
+    from datetime import datetime as _dt
+    out = []
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "fact").strip()
+        if kind not in {k.value for k in models.AIMemoryKind}:
+            kind = "fact"
+        title = str(item.get("title") or "").strip()[:300]
+        if not title:
+            continue
+        related_at = None
+        raw_dt = item.get("related_at")
+        if raw_dt and isinstance(raw_dt, str) and ("T" in raw_dt or " " in raw_dt.strip()):
+            try:
+                related_at = _dt.fromisoformat(raw_dt.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                related_at = None
+        try:
+            importance = max(0.0, min(1.0, float(item.get("importance") or 0.5)))
+        except (TypeError, ValueError):
+            importance = 0.5
+        out.append({
+            "kind": kind,
+            "title": title,
+            "details": (str(item.get("details") or "").strip() or None),
+            "related_at": related_at,
+            "importance": importance,
+        })
+    return out
+
+
+async def _scan_chat_for_facts(db, contact: models.Contact, transcript: str) -> int:
+    """Вычитывает хвост переписки, достаёт факты/планы/договорённости и
+    сохраняет новые (без дублей по названию) как AIMemoryItem. Возвращает
+    число реально добавленных записей. Тихий откат на 0 при любой ошибке
+    Gemini — это дополнительный, не обязательный шаг, он не должен ронять
+    основной build_overview()."""
+    if not transcript or config.AI_PROVIDER != "gemini" or not config.GEMINI_API_KEY:
+        return 0
+
+    today = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
+    prompt = CHAT_FACTS_SYSTEM_PROMPT.replace("{today}", today)
+    try:
+        parsed = await ai_gemini._call_gemini(prompt, f"Контакт: {contact.name}\n\nПереписка:\n{transcript}")
+    except ai_gemini.GeminiError as exc:
+        logger.info("AI Overview: сканирование чата на факты пропущено (%s)", exc)
+        return 0
+
+    items = _parse_chat_facts(parsed.get("items"), contact.name)
+    if not items:
+        return 0
+
+    from . import crud
+    existing_titles = {
+        (m.title or "").strip().lower()
+        for m in crud.list_memory_items(db, contact_id=contact.id, limit=200)
+    }
+    added = 0
+    for item in items:
+        if item["title"].strip().lower() in existing_titles:
+            continue
+        crud.create_memory_item(db, item, source="ai_overview_scan", contact_id=contact.id)
+        existing_titles.add(item["title"].strip().lower())
+        added += 1
+    return added
+
+
 def _clamp_list(value, limit: int = 6) -> List[str]:
     if not isinstance(value, list):
         return []
@@ -225,6 +345,11 @@ async def build_overview(db, contact: models.Contact, raw_messages: Optional[lis
             transcript = ai_common.build_transcript(messages, contact.name, config.AI_LLM_MAX_MESSAGES)
 
     context = _gather_context(db, contact, transcript)
+    new_facts_count = await _scan_chat_for_facts(db, contact, transcript)
+    if new_facts_count:
+        # Пересобираем факты/события, чтобы только что найденные записи
+        # сразу попали в контекст для сценариев, а не только в БД.
+        context = _gather_context(db, contact, transcript)
     user_content = _build_user_content(contact, context, transcript)
 
     if config.AI_PROVIDER == "gemini" and config.GEMINI_API_KEY:
@@ -232,7 +357,7 @@ async def build_overview(db, contact: models.Contact, raw_messages: Optional[lis
             parsed = await ai_gemini._call_gemini(OVERVIEW_SYSTEM_PROMPT, user_content)
             scenarios = _parse_scenarios(parsed.get("scenarios"))
             current_state = str(parsed.get("current_state") or "").strip()
-            if current_state and scenarios:
+            if current_state:
                 confidence = str(parsed.get("confidence") or "средняя").strip().lower()
                 if confidence not in {"высокая", "средняя", "низкая"}:
                     confidence = "средняя"
@@ -251,7 +376,13 @@ async def build_overview(db, contact: models.Contact, raw_messages: Optional[lis
                     "confidence": confidence,
                     "risk_note": str(parsed.get("risk_note") or "").strip() or None,
                     "source": "gemini",
+                    "new_facts_count": new_facts_count,
                 }
+            logger.warning(
+                "AI Overview: ответ Gemini не прошёл валидацию "
+                "(current_state=%r, сырых сценариев=%s, распарсенных=%s); сырой ответ: %.500r",
+                bool(current_state), len(parsed.get("scenarios") or []), len(scenarios), parsed,
+            )
         except ai_gemini.GeminiError as exc:
             logger.warning("AI Overview: откат на локальный результат (%s)", exc)
 
@@ -268,4 +399,5 @@ async def build_overview(db, contact: models.Contact, raw_messages: Optional[lis
         "confidence": None,
         "risk_note": None,
         "source": "local",
+        "new_facts_count": new_facts_count,
     }

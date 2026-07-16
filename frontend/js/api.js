@@ -102,6 +102,7 @@ const API = (() => {
 
     // contact intelligence (AI-анализ)
     analyzeContact: (id) => request(`/contacts/${id}/analyze`, { method: "POST" }),
+    fullAiScan: (id) => request(`/contacts/${id}/full-scan`, { method: "POST" }),
     generateDeepReport: (id) => request(`/contacts/${id}/deep-report`, { method: "POST" }),
     getDeepReport: (id) => request(`/contacts/${id}/deep-report`),
     generateOverview: (id) => request(`/contacts/${id}/overview`, { method: "POST" }),
@@ -253,6 +254,7 @@ const API = (() => {
     aiListDecisions: () => request(`/ai/decisions`),
     aiChooseDecision: (id, chosenOption) =>
       request(`/ai/decisions/${id}/choose`, { method: "POST", body: JSON.stringify({ chosen_option: chosenOption }) }),
+    aiDeleteDecision: (id) => request(`/ai/decisions/${id}`, { method: "DELETE" }),
     aiGetInsights: () => request(`/ai/insights`),
   };
 })();

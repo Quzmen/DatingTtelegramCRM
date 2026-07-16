@@ -1201,6 +1201,11 @@ def choose_decision_option(db: Session, row: "models.AIDecision", chosen_option:
     db.refresh(row)
 
 
+def delete_decision(db: Session, row: "models.AIDecision") -> None:
+    db.delete(row)
+    db.commit()
+
+
 # ---------------------------------------------------------------
 # AI Overview (см. backend/ai_overview.py)
 # ---------------------------------------------------------------

@@ -660,6 +660,20 @@ class AIOverviewOut(BaseModel):
     confidence: Optional[str] = None
     risk_note: Optional[str] = None
     source: str = "gemini"
+    new_facts_count: int = 0
+
+
+# Единая кнопка "Полный AI-анализ" (см. /{contact_id}/full-scan в
+# routers/contacts.py) объединяет все три вызова в один — фронтенду не
+# нужно бить в три отдельных эндпоинта и держать три раздельных
+# состояния загрузки. Каждое из трёх полей опционально: deep_report
+# отсутствует, если Gemini не настроена (в отличие от analysis/overview,
+# у него нет локального аналога), а сам analysis есть всегда.
+class FullAiScanOut(BaseModel):
+    analysis: AnalysisOut
+    deep_report: Optional[DeepReportOut] = None
+    overview: AIOverviewOut
+    deep_report_skipped_reason: Optional[str] = None
 
 
 class AIPatternOut(BaseModel):

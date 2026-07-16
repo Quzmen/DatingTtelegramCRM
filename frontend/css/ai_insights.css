@@ -708,6 +708,14 @@
 }
 .aiw-dcard__situation{ font-size:13px; font-weight:700; color: var(--ink); margin-bottom:10px; }
 
+.aiw-dcard__head{ display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.aiw-dcard__head .aiw-dcard__situation{ margin-bottom:10px; flex:1; }
+.aiw-dcard__delete{
+  flex:0 0 auto; border:none; background:transparent; color: var(--ink-faint);
+  font-size:16px; line-height:1; cursor:pointer; padding:2px 6px; border-radius: var(--radius-sm);
+}
+.aiw-dcard__delete:hover{ color: var(--rose); background: var(--rose-tint); }
+
 .aiw-dcard__option{
   border:1px solid var(--border);
   border-radius: var(--radius-sm);
