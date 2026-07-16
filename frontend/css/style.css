@@ -741,20 +741,21 @@ ul{ list-style:none; margin:0; padding:0; }
 .toast.is-visible{ opacity:1; transform: translateX(-50%) translateY(-4px); }
 
 /* ============================================================
-   [hidden] attribute fix
+   [hidden] attribute fix — GLOBAL, not a whitelist.
 
-   Several elements above (.view, .modal-overlay, .railnav__badge)
-   set their own `display` value. Since a plain [hidden] selector
-   has the same specificity as a single class selector, whichever
-   rule is declared LAST in the stylesheet wins the tie -- so
-   without this block, those elements' `display:flex` always won
-   over the browser's built-in `[hidden]{display:none}`, and toggling
-   the `hidden` property/attribute in JS had no visual effect at all
-   (modal stayed open, all views rendered stacked on top of each
-   other). Bumping specificity here guarantees hidden always wins,
-   regardless of source order.
-   ============================================================ */
-.view[hidden], .modal-overlay[hidden], .railnav__badge[hidden], .codetail__body[hidden], .codetail__empty[hidden]{ display:none; }
+   Lots of elements across style.css / chatview.css / campaigns.css /
+   medialibrary.css / ai_insights.css set their own `display` value
+   on a class (.view, .stat-grid, .tg-quick-actions, .ai-panel, ...).
+   The browser's built-in `[hidden]{display:none}` rule lives in the
+   user-agent stylesheet, and ANY author-stylesheet rule beats a UA
+   rule regardless of specificity or source order -- so every one of
+   those classes silently defeats `.hidden = true/false` in JS unless
+   explicitly overridden. Maintaining a per-element whitelist here
+   proved unreliable (found .ai-panel, .stat-grid, and
+   .tg-quick-actions missing from an earlier version of this list,
+   still visible after being "hidden"). Use `!important` once, here,
+   globally, instead of chasing every new class that sets `display`. */
+[hidden]{ display:none !important; }
 
 /* ============================================================
    Telegram view

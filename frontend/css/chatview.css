@@ -94,11 +94,10 @@
   color: var(--ink-faint); text-align:center;
 }
 .thread__body{ flex:1; min-height:0; display:flex; flex-direction:column; }
-/* Класс задаёт display:flex с той же специфичностью, что и служебное
-   правило [hidden]{display:none} — без явного override ниже атрибут
-   hidden не скрывал эти блоки, и был виден "Выберите диалог слева"
-   поверх открытого чата (ЭТАП 1, п.5). */
-.thread__empty[hidden], .thread__body[hidden]{ display:none; }
+/* [hidden] handling for .thread__empty / .thread__body is now covered
+   globally by the `[hidden]{ display:none !important; }` rule in
+   style.css — see the comment there for why a per-file override list
+   didn't hold up. */
 
 .thread__head{
   flex:none;
