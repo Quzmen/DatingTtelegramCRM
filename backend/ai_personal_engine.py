@@ -167,7 +167,11 @@ async def extract_memory(text: str, contact_id: Optional[int] = None) -> Dict:
     Gemini делает простой локальный откат (одна запись типа fact с
     исходным текстом целиком), а не падает."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    prompt = MEMORY_SYSTEM_PROMPT.format(today=today)
+    # .format() ломался на этой строке: помимо плейсхолдера {today} в
+    # промпте есть литеральный пример JSON-ответа ({"items": [...]}), и
+    # .format() пытается распарсить ЛЮБЫЕ фигурные скобки как поля —
+    # отсюда KeyError: '"items"'. .replace() трогает только {today}.
+    prompt = MEMORY_SYSTEM_PROMPT.replace("{today}", today)
     parsed = await _call(prompt, text, complexity="fast")
 
     if parsed and isinstance(parsed.get("items"), list):
