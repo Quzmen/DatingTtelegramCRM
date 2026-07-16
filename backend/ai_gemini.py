@@ -14,6 +14,7 @@ Google Gemini). Активен при AI_PROVIDER=gemini + заданном GEMI
 """
 import asyncio
 import logging
+import time
 from typing import Dict, List, Optional
 
 from . import ai_common, config, models
@@ -28,7 +29,37 @@ GEMINI_URL_TMPL = (
 # превышен лимит запросов, 503 — сервис временно перегружен). Бесплатный
 # тариф Gemini разрешает совсем немного запросов в минуту, поэтому это
 # частая ситуация при анализе нескольких контактов подряд, а не баг.
-RETRY_DELAY_SECONDS = 3
+RETRY_DELAY_SECONDS = 8
+# Отдельно для 429: одного повтора часто не хватает, лимит free-тарифа
+# считается за минуту целиком — пробуем ещё раз с более длинной паузой,
+# прежде чем сдаваться и откатываться на локальный результат.
+RATE_LIMIT_MAX_RETRIES = 2
+RATE_LIMIT_RETRY_DELAYS = (8, 20)
+
+# ---------------------------------------------------------------
+# Пейсинг между запросами к Gemini в пределах одного процесса.
+#
+# "Полный AI-анализ" (routers/contacts.py: full_ai_scan) делает подряд
+# ДО ЧЕТЫРЁХ вызовов _call_gemini за один клик (Contact Intelligence +
+# Deep Report + 2 внутри AI Overview) — без этого лимитера они уходят
+# в Gemini почти одновременно и почти гарантированно ловят 429 на
+# бесплатном тарифе. MIN_INTERVAL_SECONDS гарантирует минимальный
+# промежуток между НАЧАЛОМ каждого запроса, независимо от того, из
+# какого эндпоинта он пришёл — тем самым все вызовы в рамках одного
+# воркера автоматически выстраиваются в очередь с паузами, как раньше
+# получалось само собой, когда пользователь жал на разные кнопки в
+# разное время.
+#
+# Ограничение: лимитер процессный, а не общий на все воркеры/поды —
+# если сервис поднят в нескольких репликах на одном GEMINI_API_KEY,
+# паузы между запросами ИЗ РАЗНЫХ ПОДОВ этим не покрываются. Для
+# полного решения нужен общий счётчик (Redis/БД), но и процессного
+# лимитера достаточно, чтобы убрать проблему при одном клике по
+# "Полный AI-анализ" — исходную причину регресса.
+# ---------------------------------------------------------------
+MIN_INTERVAL_SECONDS = 4.5
+_pacing_lock = asyncio.Lock()
+_last_call_at = 0.0
 
 
 class GeminiError(Exception):
@@ -37,7 +68,16 @@ class GeminiError(Exception):
     routers/contacts.py), а не заставлять лезть в терминал backend'а."""
 
 
-async def _call_gemini(system_prompt: str, user_content: str, *, _retried: bool = False) -> dict:
+async def _pace_request() -> None:
+    global _last_call_at
+    async with _pacing_lock:
+        wait_for = MIN_INTERVAL_SECONDS - (time.monotonic() - _last_call_at)
+        if wait_for > 0:
+            await asyncio.sleep(wait_for)
+        _last_call_at = time.monotonic()
+
+
+async def _call_gemini(system_prompt: str, user_content: str, *, _retry_count: int = 0) -> dict:
     """Общий HTTP-вызов Gemini generateContent + разбор JSON-ответа.
     Либо возвращает распарсенный dict, либо кидает GeminiError с понятной
     причиной — вызывающий код сам решает, что делать (тихий откат в
@@ -49,6 +89,9 @@ async def _call_gemini(system_prompt: str, user_content: str, *, _retried: bool 
         import httpx
     except ImportError:
         raise GeminiError("пакет httpx не установлен (pip install -r requirements.txt)")
+
+    if _retry_count == 0:
+        await _pace_request()
 
     url = GEMINI_URL_TMPL.format(model=config.GEMINI_MODEL)
     payload = {
@@ -68,18 +111,20 @@ async def _call_gemini(system_prompt: str, user_content: str, *, _retried: bool 
         raise GeminiError(f"сетевая ошибка ({type(exc).__name__}): {exc}") from exc
 
     if response.status_code == 429:
-        if not _retried:
-            logger.info("Gemini: превышен лимит запросов (429), повтор через %sс", RETRY_DELAY_SECONDS)
-            await asyncio.sleep(RETRY_DELAY_SECONDS)
-            return await _call_gemini(system_prompt, user_content, _retried=True)
+        if _retry_count < RATE_LIMIT_MAX_RETRIES:
+            delay = RATE_LIMIT_RETRY_DELAYS[min(_retry_count, len(RATE_LIMIT_RETRY_DELAYS) - 1)]
+            logger.info("Gemini: превышен лимит запросов (429), повтор через %sс (попытка %s/%s)",
+                        delay, _retry_count + 1, RATE_LIMIT_MAX_RETRIES)
+            await asyncio.sleep(delay)
+            return await _call_gemini(system_prompt, user_content, _retry_count=_retry_count + 1)
         raise GeminiError(
             "превышен лимит запросов Gemini (429) — на бесплатном тарифе это лимит в минуту, "
             "подождите немного и попробуйте снова"
         )
-    if response.status_code == 503 and not _retried:
+    if response.status_code == 503 and _retry_count == 0:
         logger.info("Gemini: сервис временно перегружен (503), повтор через %sс", RETRY_DELAY_SECONDS)
         await asyncio.sleep(RETRY_DELAY_SECONDS)
-        return await _call_gemini(system_prompt, user_content, _retried=True)
+        return await _call_gemini(system_prompt, user_content, _retry_count=_retry_count + 1)
     if response.status_code == 401 or response.status_code == 403:
         raise GeminiError(f"HTTP {response.status_code} — похоже, неверный или отозванный GEMINI_API_KEY")
     if response.status_code >= 400:
