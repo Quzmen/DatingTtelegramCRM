@@ -103,6 +103,7 @@ const Campaigns = (() => {
     const filtered = campaigns.filter(LIST_FILTERS.find((f) => f.id === activeListFilter).match);
 
     list.innerHTML = `
+      <div class="stat-grid campaign-kpis">${campaignKpisHTML()}</div>
       <div class="campaign-filter-tabs" id="campaignFilterTabs">
         ${LIST_FILTERS.map((f) => {
           const count = campaigns.filter(f.match).length;
@@ -123,6 +124,31 @@ const Campaigns = (() => {
         btn.addEventListener("click", () => handleAction(btn.dataset.action, id));
       });
     });
+  }
+
+  function campaignKpisHTML() {
+    const active = campaigns.filter((c) => c.status === "running").length;
+    const totalSent = campaigns.reduce((sum, c) => sum + (c.processed_count || 0), 0);
+    const totalOk = campaigns.reduce((sum, c) => sum + (c.completed_count || 0), 0);
+    const totalErr = campaigns.reduce((sum, c) => sum + (c.error_count || 0), 0);
+    const deliveryRate = totalSent ? Math.round((totalOk / totalSent) * 100) : null;
+    return `
+      <div class="stat-card">
+        <div class="stat-card__label">Активные кампании</div>
+        <div class="stat-card__value ${active ? "accent-teal" : ""}">${active}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card__label">Отправлено всего</div>
+        <div class="stat-card__value accent-primary">${totalSent}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card__label">Доставлено успешно</div>
+        <div class="stat-card__value ${deliveryRate == null ? "" : "accent-teal"}">${deliveryRate == null ? "—" : deliveryRate + "%"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card__label">Ошибки отправки</div>
+        <div class="stat-card__value ${totalErr ? "accent-amber" : ""}">${totalErr}</div>
+      </div>`;
   }
 
   function campaignCardHTML(c) {

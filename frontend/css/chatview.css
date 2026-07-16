@@ -118,6 +118,7 @@
 .thread__head-status.is-online{ color: var(--teal); font-weight:600; }
 .thread__head-status.is-typing{ color: var(--primary-ink); font-weight:600; }
 .thread__head-actions{ margin-left:auto; display:flex; gap:6px; }
+.thread__head-back{ display:none; }
 
 .thread__messages-wrap{
   flex:1; min-height:0; position:relative;

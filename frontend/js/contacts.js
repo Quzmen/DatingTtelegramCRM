@@ -259,6 +259,7 @@ const Contacts = (() => {
     stopChatPolling();
     activeId = id;
     document.querySelectorAll(".ccard").forEach((c) => c.classList.toggle("is-active", Number(c.dataset.id) === id));
+    document.getElementById("contactsBodyTable").classList.add("has-open-detail");
 
     const contact = await API.getContact(id);
     renderDetail(contact);
@@ -266,6 +267,12 @@ const Contacts = (() => {
     document.getElementById("codetailEmpty").hidden = true;
     const body = document.getElementById("codetailBody");
     body.hidden = false;
+  }
+
+  function backToContactList() {
+    activeId = null;
+    document.getElementById("contactsBodyTable").classList.remove("has-open-detail");
+    document.querySelectorAll(".ccard").forEach((c) => c.classList.remove("is-active"));
   }
 
   function renderDetail(c) {
@@ -285,6 +292,9 @@ const Contacts = (() => {
             <div class="co-head__uname">${Utils.escapeHtml(c.username || "без username")}</div>
           </div>
           <div class="co-head__actions">
+            <button class="btn btn--icon co-head__back" id="btnBackToContactList" title="К списку контактов">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
             <button class="btn btn--danger" id="btnDeleteContact">Удалить</button>
           </div>
         </div>
@@ -1038,11 +1048,14 @@ const Contacts = (() => {
       renderDetail(fresh);
     });
 
+    document.getElementById("btnBackToContactList").addEventListener("click", backToContactList);
+
     document.getElementById("btnDeleteContact").addEventListener("click", async () => {
       if (!confirm(`Удалить контакт «${c.name}»? Это действие необратимо.`)) return;
       stopChatPolling();
       await API.deleteContact(c.id);
       activeId = null;
+      document.getElementById("contactsBodyTable").classList.remove("has-open-detail");
       document.getElementById("codetailBody").hidden = true;
       document.getElementById("codetailEmpty").hidden = false;
       Utils.toast("Контакт удалён");

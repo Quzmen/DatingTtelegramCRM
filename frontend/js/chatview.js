@@ -288,6 +288,7 @@ const ChatView = (() => {
     threadEmptyEl.style.display = activeId ? "none" : "";
     threadBodyEl.hidden = !activeId;
     threadBodyEl.style.display = activeId ? "" : "none";
+    $("view-chat").classList.toggle("has-open-dialog", !!activeId);
     if (!activeId) return;
 
     if (activeDialog) {
@@ -630,6 +631,8 @@ const ChatView = (() => {
         <button class="btn btn--primary infopanel__save" id="btnQuickAdd" type="button">Добавить в CRM</button>`;
       $("btnQuickAdd").addEventListener("click", quickAddToCrm);
       $("paneHistoryTab").innerHTML = `<p style="font-size:12.5px;color:var(--ink-faint);">Добавьте контакт в CRM, чтобы вести историю взаимодействия.</p>`;
+      $("threadTemp").hidden = true;
+      renderAIPane();
       return;
     }
 
@@ -658,6 +661,7 @@ const ChatView = (() => {
     `).join("") || `<div class="empty-col">Записей пока нет</div>`;
 
     refreshLiveScore(); // сразу считаем при открытии диалога, дальше — по таймеру (см. startPolling)
+    renderAIPane();
   }
 
   // ---- "живая" оценка интереса (см. AI_PROVIDER=local в analysis.py) --
@@ -682,14 +686,98 @@ const ChatView = (() => {
 
   function renderLiveScore(data) {
     const box = $("liveScoreBox");
-    if (!box) return;
-    const badge = Utils.aiScoreBadge(data.interest_score);
-    box.innerHTML = `
-      <span class="ai-badge ai-badge--${badge.cls}">${data.interest_score}<small>/100</small></span>
-      <span class="live-score__cat">${Utils.escapeHtml(badge.label)}</span>
-      ${Utils.trendChipHTML(data.trend)}
-      ${data.status_change_suggested ? `<span class="live-score__hint">похоже на «${Utils.escapeHtml(data.suggested_status_label)}»</span>` : ""}
-    `;
+    if (box) {
+      const badge = Utils.aiScoreBadge(data.interest_score);
+      box.innerHTML = `
+        <span class="ai-badge ai-badge--${badge.cls}">${data.interest_score}<small>/100</small></span>
+        <span class="live-score__cat">${Utils.escapeHtml(badge.label)}</span>
+        ${Utils.trendChipHTML(data.trend)}
+        ${data.status_change_suggested ? `<span class="live-score__hint">похоже на «${Utils.escapeHtml(data.suggested_status_label)}»</span>` : ""}
+      `;
+    }
+    const temp = $("threadTemp");
+    if (temp) {
+      const badge = Utils.aiScoreBadge(data.interest_score);
+      temp.hidden = false;
+      temp.className = `thread__head-temp thread__head-temp--${badge.cls}`;
+      temp.textContent = `${data.interest_score}°`;
+      temp.title = `AI-температура диалога: ${badge.label}`;
+    }
+  }
+
+  const AI_SOURCE_LABELS_CHAT = { gemini: "Gemini", local: "локально" };
+
+  function renderAIPane() {
+    const pane = $("paneAI");
+    if (!pane) return;
+
+    if (!activeContact) {
+      pane.innerHTML = `<p style="font-size:12.5px;color:var(--ink-faint);">Добавьте контакт в CRM на вкладке «Инфо», чтобы получить AI-анализ переписки.</p>`;
+      return;
+    }
+
+    const c = activeContact;
+    const badge = Utils.aiScoreBadge(c.analyzed_at ? c.interest_score : null);
+    const sourceLabel = AI_SOURCE_LABELS_CHAT[c.ai_source] || "локально";
+    const isLlm = c.analyzed_at && c.ai_source && c.ai_source !== "local";
+
+    pane.innerHTML = `
+      <div class="ai-panel">
+        <div class="ai-panel__head">
+          <div class="ai-panel__title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
+            Contact Intelligence
+            ${c.analyzed_at ? `<span class="ai-panel__source" title="${isLlm ? "Summary и следующее действие сгенерированы внешним API" : "Посчитано локально, без внешних сервисов"}">${sourceLabel}</span>` : ""}
+          </div>
+          <button class="btn btn--icon" id="btnChatAnalyze" title="Обновить AI-анализ" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+          </button>
+        </div>
+        ${c.analyzed_at ? `
+        <div class="ai-panel__score">
+          <span class="ai-badge ai-badge--${badge.cls} ai-badge--lg">${c.interest_score}<small>/100</small></span>
+          <div class="ai-panel__score-meta">
+            <div class="ai-panel__category">${Utils.escapeHtml(badge.label)} ${Utils.trendChipHTML(c.trend)}</div>
+            <div class="ai-panel__analyzed">Анализ обновлён: ${Utils.formatDateTime(c.analyzed_at)}</div>
+          </div>
+        </div>
+        <div class="ai-panel__row"><span class="ai-panel__label">Следующее действие</span><span class="ai-panel__value">${Utils.escapeHtml(c.next_action || "\u2014")}</span></div>
+        <div class="ai-panel__summary">${Utils.escapeHtml(c.ai_summary || "")}</div>
+        ${c.suggested_reply ? `
+        <div class="ai-panel__reply">
+          <div class="ai-panel__label">Черновик ответа</div>
+          <div class="ai-panel__reply-text">${Utils.escapeHtml(c.suggested_reply)}</div>
+          <button class="btn btn--primary btn--sm" id="btnChatInsertReply" type="button">Вставить в поле ввода</button>
+        </div>` : ""}
+        ` : `
+        <div class="ai-panel__empty">Анализ ещё не запускался. Нажмите на значок обновления, чтобы оценить интерес по переписке.</div>
+        `}
+      </div>`;
+
+    const btnAnalyze = $("btnChatAnalyze");
+    if (btnAnalyze) btnAnalyze.addEventListener("click", async () => {
+      btnAnalyze.classList.add("is-spinning");
+      try {
+        await API.analyzeContact(c.id);
+        activeContact = await API.getContact(c.id);
+        renderAIPane();
+        Utils.toast("Анализ обновлён");
+      } catch (err) {
+        Utils.toast(err.message || "Не удалось выполнить анализ");
+      } finally {
+        btnAnalyze.classList.remove("is-spinning");
+      }
+    });
+
+    const btnInsert = $("btnChatInsertReply");
+    if (btnInsert) btnInsert.addEventListener("click", () => {
+      const field = $("composerText");
+      if (!field) return;
+      field.value = c.suggested_reply;
+      field.dispatchEvent(new Event("input"));
+      field.focus();
+      $("infopanel").classList.add("is-collapsed");
+    });
   }
 
   function ensureHistoryPaneMarkup() {
@@ -1154,11 +1242,20 @@ const ChatView = (() => {
         document.querySelectorAll(".infopanel__tabs .co-tab").forEach((b) => b.classList.toggle("is-active", b === btn));
         $("paneProfile").hidden = infoTab !== "profile";
         $("paneHistoryTab").hidden = infoTab !== "history";
+        $("paneAI").hidden = infoTab !== "ai";
+        if (infoTab === "ai") renderAIPane();
       });
     });
 
     $("threadInfoToggle").addEventListener("click", () => {
       $("infopanel").classList.toggle("is-collapsed");
+    });
+
+    $("threadBackBtn").addEventListener("click", () => {
+      activeId = null;
+      activeDialog = null;
+      renderThread();
+      renderList();
     });
 
     // ЭТАП 1: если пользователь сам прокрутил вверх — новые сообщения

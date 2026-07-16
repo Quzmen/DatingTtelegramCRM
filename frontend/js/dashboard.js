@@ -11,11 +11,18 @@ const Dashboard = (() => {
 
   async function render() {
     renderGreeting();
-    const [stats, reminders] = await Promise.all([API.getDashboard(), API.getReminders()]);
+    const [stats, reminders, recentContacts, campaigns] = await Promise.all([
+      API.getDashboard(),
+      API.getReminders(),
+      API.listContacts({}).catch(() => []),
+      API.listCampaigns().catch(() => []),
+    ]);
 
     renderStatGrid(stats);
     renderStageBars(stats.by_status, stats.total_contacts);
     renderAttentionList(reminders);
+    renderRecentContacts(recentContacts);
+    renderCampaignsMini(campaigns);
 
     // badge on the rail nav icon
     const badge = document.getElementById("attentionBadge");
@@ -25,6 +32,70 @@ const Dashboard = (() => {
     } else {
       badge.hidden = true;
     }
+  }
+
+  function wireQuickActions() {
+    const btnNewContact = document.getElementById("btnDashNewContact");
+    const btnNewCampaign = document.getElementById("btnDashNewCampaign");
+    const btnOpenAI = document.getElementById("btnDashOpenAI");
+    if (btnNewContact) btnNewContact.addEventListener("click", () => (document.getElementById("modalNewContact").hidden = false));
+    if (btnOpenAI) btnOpenAI.addEventListener("click", () => App.switchView("ai"));
+    if (btnNewCampaign) btnNewCampaign.addEventListener("click", () => App.switchView("campaigns"));
+  }
+
+  function renderRecentContacts(list) {
+    const el = document.getElementById("recentContactsList");
+    if (!el) return;
+    const items = (list || []).slice(0, 6);
+    if (!items.length) {
+      el.innerHTML = `<div class="empty-hint">Пока нет контактов — добавьте первого.</div>`;
+      return;
+    }
+    el.innerHTML = items
+      .map(
+        (c) => `
+      <div class="recent-row" data-id="${c.id}">
+        <div class="recent-row__avatar">${Utils.escapeHtml((c.name || "?").slice(0, 1).toUpperCase())}</div>
+        <div class="recent-row__main">
+          <div class="recent-row__name">${Utils.escapeHtml(c.name)}</div>
+          <div class="recent-row__status">${Utils.escapeHtml(c.status_label || c.status || "")}</div>
+        </div>
+      </div>`
+      )
+      .join("");
+    el.querySelectorAll(".recent-row").forEach((row) => {
+      row.addEventListener("click", () => App.goToContact(Number(row.dataset.id)));
+    });
+  }
+
+  function renderCampaignsMini(list) {
+    const el = document.getElementById("campaignsMini");
+    if (!el) return;
+    const items = list || [];
+    if (!items.length) {
+      el.innerHTML = `<div class="empty-hint">Кампаний ещё нет — запустите первую рассылку.</div>`;
+      return;
+    }
+    const active = items.filter((c) => c.status === "running" || c.status === "in_progress").length;
+    const sorted = [...items].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)).slice(0, 3);
+    el.innerHTML = `
+      <div class="campaigns-mini__summary">
+        <span class="campaigns-mini__count">${active}</span> активных из ${items.length}
+      </div>
+      <div class="campaigns-mini__list">
+        ${sorted
+          .map(
+            (c) => `
+          <div class="campaigns-mini__row" data-id="${c.id}">
+            <span class="campaigns-mini__name">${Utils.escapeHtml(c.name || "Без названия")}</span>
+            <span class="campaigns-mini__status campaigns-mini__status--${c.status || "draft"}">${Utils.escapeHtml(c.status || "draft")}</span>
+          </div>`
+          )
+          .join("")}
+      </div>`;
+    el.querySelectorAll(".campaigns-mini__row").forEach((row) => {
+      row.addEventListener("click", () => App.switchView("campaigns"));
+    });
   }
 
   function renderStatGrid(stats) {
@@ -87,6 +158,8 @@ const Dashboard = (() => {
       });
     });
   }
+
+  wireQuickActions();
 
   return { render };
 })();

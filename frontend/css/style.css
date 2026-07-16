@@ -284,6 +284,54 @@ ul{ list-style:none; margin:0; padding:0; }
 .attn-row__name{ font-weight:600; font-size:13px; }
 .attn-row__meta{ font-size:11.5px; color: var(--ink-faint); margin-left:auto; font-family: var(--font-mono); }
 
+.thread__head-temp{
+  font-family: var(--font-mono); font-size:12px; font-weight:700;
+  padding:3px 9px; border-radius:999px; margin-right:8px;
+  background: var(--slate-tint); color: var(--ink-soft); cursor:default;
+}
+.thread__head-temp--cold{ background: var(--slate-tint); color: var(--ink-soft); }
+.thread__head-temp--warm{ background: var(--amber-tint); color: var(--amber); }
+.thread__head-temp--hot{ background: var(--teal-tint); color: var(--teal); }
+.thread__head-temp--veryhot{ background: var(--rose-tint); color: var(--rose); }
+.thread__head-temp--unknown{ display:none; }
+.dash-col{ display:flex; flex-direction:column; gap:16px; }
+
+.recent-list{ display:flex; flex-direction:column; gap:2px; max-height:280px; overflow-y:auto; }
+.recent-row{ display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid var(--border); cursor:pointer; }
+.recent-row:last-child{ border-bottom:none; }
+.recent-row:hover .recent-row__name{ color: var(--primary); }
+.recent-row__avatar{
+  width:26px; height:26px; border-radius:50%; flex:none;
+  background: var(--primary-tint); color: var(--primary-ink);
+  display:flex; align-items:center; justify-content:center;
+  font-size:11.5px; font-weight:700;
+}
+.recent-row__name{ font-weight:600; font-size:13px; }
+.recent-row__status{ font-size:11px; color: var(--ink-faint); }
+
+.campaigns-mini__summary{ font-size:12.5px; color: var(--ink-soft); margin-bottom:12px; }
+.campaigns-mini__count{ font-family: var(--font-mono); font-weight:800; color: var(--teal); font-size:15px; }
+.campaigns-mini__list{ display:flex; flex-direction:column; gap:8px; }
+.campaigns-mini__row{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 10px; border-radius: var(--radius-sm); background: var(--slate-tint); cursor:pointer;
+}
+.campaigns-mini__row:hover{ background: var(--primary-tint); }
+.campaigns-mini__name{ font-size:12.5px; font-weight:600; }
+.campaigns-mini__status{
+  font-size:10.5px; font-family: var(--font-mono); text-transform:uppercase;
+  padding:2px 7px; border-radius:6px; color: var(--ink-soft); background: var(--border);
+}
+.campaigns-mini__status--running{ color: var(--teal); background: var(--teal-tint); }
+.campaigns-mini__status--paused{ color: var(--amber); background: var(--amber-tint); }
+.campaigns-mini__status--failed{ color: var(--rose); background: var(--rose-tint); }
+
+@media (max-width: 720px){
+  .view__head{ flex-direction:column; align-items:flex-start; gap:12px; }
+  .dash-quickactions{ width:100%; }
+  .dash-quickactions .btn{ flex:1; }
+}
+
 /* ============================================================
    Contacts view: list + detail
    ============================================================ */
@@ -471,6 +519,7 @@ ul{ list-style:none; margin:0; padding:0; }
 .co-head__name{ font-size:18px; font-weight:800; letter-spacing:-.01em; }
 .co-head__uname{ color: var(--ink-faint); font-family: var(--font-mono); font-size:12.5px; margin-top:1px; }
 .co-head__actions{ margin-left:auto; display:flex; gap:8px; }
+.co-head__back{ display:none; }
 
 .co-fieldgrid{
   display:grid; grid-template-columns: 1fr 1fr; gap:10px 14px;
@@ -933,8 +982,53 @@ ul{ list-style:none; margin:0; padding:0; }
 }
 
 @media (max-width: 640px){
-  .railnav{ width:56px; }
-  #view-dashboard, #view-telegram, #view-campaigns{ padding: 18px 14px; }
-  .stat-grid{ grid-template-columns: repeat(2,1fr); gap:10px; }
+  /* ---- Bottom tab bar instead of a left icon rail ---- */
+  .railnav{
+    position: fixed; left:0; right:0; bottom:0; top:auto;
+    width:100%; height:60px;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items:center;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+    border-right:none; border-top:1px solid var(--border);
+    z-index: 40;
+    gap:0;
+  }
+  .railnav__mark{ display:none; } /* статус Telegram уходит в раздел "Telegram" в самом низу списка вкладок */
+  .railnav__spacer{ display:none; }
+  .railnav__btn{ width:auto; flex:1; height:44px; }
+
+  /* content needs room at the bottom for the fixed tab bar */
+  #view-dashboard, #view-telegram, #view-campaigns{
+    padding-bottom: 76px;
+  }
+  .colist__items, .chatlist__items{ padding-bottom: 76px; }
+
+  .stat-grid{ grid-template-columns: repeat(2,1fr); gap:8px; }
+  .stat-card{ padding:14px 14px 12px; }
+  .stat-card__value{ font-size:24px; }
+
   .colist{ width:210px; }
+
+  /* ---- Contacts: list vs detail, one screen at a time ---- */
+  .contacts-body{ position:relative; }
+  .colist{ width:100%; }
+  .codetail{ display:none; }
+  .contacts-body.has-open-detail .colist{ display:none; }
+  .contacts-body.has-open-detail .codetail{
+    display:flex; position:fixed; inset:0 0 60px 0; z-index:30;
+    background: var(--bg); overflow-y:auto; padding: 18px 16px;
+  }
+  .co-head__back{ display:inline-flex; order:-1; margin-right:auto; }
+
+  /* ---- Chat: list vs thread, one screen at a time ---- */
+  #view-chat{ padding-bottom:60px; }
+  .chatlist{ width:100%; }
+  #view-chat.has-open-dialog .chatlist{ display:none; }
+  #view-chat:not(.has-open-dialog) .thread{ display:none; }
+  .thread__head-back{ display:inline-flex; }
+  .msg-row{ max-width:88%; }
+
+  /* AI view's floating "Решения" button would otherwise sit under the bottom nav */
+  .aiw-fab{ bottom: 76px; }
 }
