@@ -83,22 +83,22 @@
   overflow:hidden;
 }
 .campaign-card__bar div{
-  height:100%; background: linear-gradient(90deg, var(--primary), #6D7CE8);
+  height:100%; background: linear-gradient(90deg, var(--primary), var(--purple));
   border-radius:6px; transition: width .3s ease;
 }
 
 /* status badges — переиспользуют .badge/.dot из style.css */
-.status-camp-draft{                 background: var(--slate-tint); color:#4B4F66; }
-.status-camp-draft .dot{            background:#8489A6; }
+.status-camp-draft{                 background: var(--slate-tint); color: var(--ink-soft); }
+.status-camp-draft .dot{            background: var(--slate); }
 .status-camp-ready{                 background: var(--primary-tint); color: var(--primary-ink); }
 .status-camp-ready .dot{            background: var(--primary); }
-.status-camp-running{               background: var(--teal-tint); color:#1D7A65; }
+.status-camp-running{               background: var(--teal-tint); color: var(--teal); }
 .status-camp-running .dot{          background: var(--teal); }
-.status-camp-paused{                background: var(--amber-tint); color:#9A6A1C; }
+.status-camp-paused{                background: var(--amber-tint); color: var(--amber); }
 .status-camp-paused .dot{           background: var(--amber); }
-.status-camp-completed{             background: var(--teal-tint); color:#1D7A65; }
+.status-camp-completed{             background: var(--teal-tint); color: var(--teal); }
 .status-camp-completed .dot{        background: var(--teal); }
-.status-camp-completed_with_errors{ background: var(--rose-tint); color:#8C3E4E; }
+.status-camp-completed_with_errors{ background: var(--rose-tint); color: var(--rose); }
 .status-camp-completed_with_errors .dot{ background: var(--rose); }
 
 /* edit modal ------------------------------------------------------- */

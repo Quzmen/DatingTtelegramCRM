@@ -1,6 +1,16 @@
 /* Отрисовка главной панели (Dashboard). */
 const Dashboard = (() => {
+  function renderGreeting() {
+    const el = document.getElementById("dashGreeting");
+    if (!el) return;
+    const h = new Date().getHours();
+    const text =
+      h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер";
+    el.textContent = text;
+  }
+
   async function render() {
+    renderGreeting();
     const [stats, reminders] = await Promise.all([API.getDashboard(), API.getReminders()]);
 
     renderStatGrid(stats);
