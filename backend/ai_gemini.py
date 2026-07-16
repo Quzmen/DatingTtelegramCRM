@@ -117,15 +117,16 @@ async def _call_gemini(system_prompt: str, user_content: str, *, _retry_count: i
         raise GeminiError(f"сетевая ошибка ({type(exc).__name__}): {exc}") from exc
 
     if response.status_code == 429:
+        quota_detail, retry_delay_hint = _parse_quota_error(response)
         if _retry_count < RATE_LIMIT_MAX_RETRIES:
-            delay = RATE_LIMIT_RETRY_DELAYS[min(_retry_count, len(RATE_LIMIT_RETRY_DELAYS) - 1)]
-            logger.info("Gemini: превышен лимит запросов (429), повтор через %sс (попытка %s/%s)",
-                        delay, _retry_count + 1, RATE_LIMIT_MAX_RETRIES)
+            delay = retry_delay_hint or RATE_LIMIT_RETRY_DELAYS[min(_retry_count, len(RATE_LIMIT_RETRY_DELAYS) - 1)]
+            logger.info("Gemini: превышен лимит запросов (429: %s), повтор через %sс (попытка %s/%s)",
+                        quota_detail or "причина не распознана", delay, _retry_count + 1, RATE_LIMIT_MAX_RETRIES)
             await asyncio.sleep(delay)
             return await _call_gemini(system_prompt, user_content, _retry_count=_retry_count + 1)
         raise GeminiError(
-            "превышен лимит запросов Gemini (429) — на бесплатном тарифе это лимит в минуту, "
-            "подождите немного и попробуйте снова"
+            f"превышен лимит запросов Gemini (429): {quota_detail}" if quota_detail else
+            "превышен лимит запросов Gemini (429) — причина не распознана, см. ответ API в логах"
         )
     if response.status_code == 503 and _retry_count == 0:
         logger.info("Gemini: сервис временно перегружен (503), повтор через %sс", RETRY_DELAY_SECONDS)
@@ -161,6 +162,50 @@ async def _call_gemini(system_prompt: str, user_content: str, *, _retry_count: i
     except (ValueError, TypeError) as exc:
         raise GeminiError(f"Gemini вернула невалидный JSON: {exc}") from exc
 
+
+
+def _parse_quota_error(response) -> tuple:
+    """Google на 429 обычно присылает тело вида:
+    {"error": {"message": "...", "status": "RESOURCE_EXHAUSTED",
+     "details": [{"@type": ".../QuotaFailure", "violations": [
+        {"quotaMetric": "...", "quotaId": "...", ...}]},
+        {"@type": ".../RetryInfo", "retryDelay": "23s"}]}}
+
+    Раньше мы это тело вообще не читали и просто предполагали "лимит в
+    минуту" — из-за чего "подождите минуту" могло быть неверным советом,
+    если на самом деле упёрлись в ДНЕВНОЙ лимит модели или в лимит по
+    конкретной метрике, которую минутным ожиданием не обойти. Возвращает
+    (человекочитаемое_описание | None, retry_delay_seconds | None)."""
+    try:
+        body = response.json()
+        error = body.get("error", {})
+    except Exception:
+        return None, None
+
+    quota_metric = None
+    retry_delay = None
+    for detail in error.get("details", []):
+        type_ = detail.get("@type", "")
+        if type_.endswith("QuotaFailure"):
+            violations = detail.get("violations") or []
+            if violations:
+                quota_metric = violations[0].get("quotaMetric") or violations[0].get("quotaId")
+        elif type_.endswith("RetryInfo"):
+            raw_delay = detail.get("retryDelay", "")
+            if raw_delay.endswith("s"):
+                try:
+                    retry_delay = float(raw_delay[:-1])
+                except ValueError:
+                    pass
+
+    message = error.get("message", "").strip()
+    parts = []
+    if quota_metric:
+        parts.append(f"метрика квоты: {quota_metric}")
+    if message:
+        parts.append(message)
+    description = "; ".join(parts) if parts else None
+    return description, retry_delay
 
 
 async def enrich(
