@@ -288,58 +288,90 @@
 
   <!-- ===== AI Insights view (Personal AI Operating System) ===== -->
   <main class="view" id="view-ai" hidden>
-    <header class="view__head">
-      <div>
-        <h1>AI Insights</h1>
-        <p class="view__sub">Личная память, паттерны и разбор решений — только про вас, не про собеседников</p>
-      </div>
-    </header>
+    <div class="aiw">
 
-    <section class="ai-tabs">
-      <button class="ai-tabs__btn is-active" data-aitab="memory">Память</button>
-      <button class="ai-tabs__btn" data-aitab="timeline">Таймлайн</button>
-      <button class="ai-tabs__btn" data-aitab="decisions">Решения</button>
-      <button class="ai-tabs__btn" data-aitab="patterns">Паттерны</button>
-      <button class="ai-tabs__btn" data-aitab="recommendations">Рекомендации</button>
-    </section>
+      <!-- Capture -->
+      <section class="aiw-capture">
+        <form class="aiw-capture__form" id="aiMemoryForm">
+          <span class="aiw-capture__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></svg></span>
+          <textarea id="aiMemoryInput" class="aiw-capture__input" rows="1" placeholder="Опишите что-то своими словами: «В пятницу встречаюсь с другом в 18:00» — AI сам достанет из этого событие и договорённость…"></textarea>
+          <div class="aiw-capture__actions">
+            <button type="button" class="aiw-capture__decision-btn" id="btnOpenDecision">Разбор решения</button>
+            <button type="submit" class="aiw-capture__submit" id="aiMemorySubmit">Запомнить</button>
+          </div>
+        </form>
+        <div class="aiw-conflicts" id="aiMemoryConflicts" hidden></div>
+      </section>
 
-    <!-- Memory -->
-    <section class="ai-panel" id="aiPanelMemory">
-      <form class="ai-memory-form" id="aiMemoryForm">
-        <textarea id="aiMemoryInput" placeholder="Опишите что-то своими словами: «В пятницу встречаюсь с другом в 18:00» — AI сам достанет из этого событие и договорённость…" rows="2"></textarea>
-        <button type="submit" class="btn btn--primary">Запомнить</button>
-      </form>
-      <div class="ai-memory-conflicts" id="aiMemoryConflicts" hidden></div>
-      <div class="ai-memory-list" id="aiMemoryList"></div>
-    </section>
+      <!-- AI Overview -->
+      <section class="aiw-hero" id="aiwHero">
+        <div class="aiw-hero__glow" aria-hidden="true"></div>
+        <div class="aiw-hero__head">
+          <h1>AI Overview</h1>
+          <p>Личная память, паттерны и разбор решений — только про вас, не про собеседников</p>
+        </div>
+        <div class="aiw-hero__stats" id="aiwStats"></div>
+      </section>
 
-    <!-- Timeline -->
-    <section class="ai-panel" id="aiPanelTimeline" hidden>
-      <div class="ai-timeline" id="aiTimeline"></div>
-    </section>
+      <!-- Bento: memories (large) + patterns / recommendations (stacked) -->
+      <section class="aiw-bento">
+        <div class="aiw-panel aiw-panel--memories">
+          <header class="aiw-panel__head">
+            <h2>Память</h2>
+            <div class="aiw-filterchips" id="aiwMemoryFilters"></div>
+          </header>
+          <div class="aiw-memory-list" id="aiMemoryList"></div>
+        </div>
 
-    <!-- Decisions -->
-    <section class="ai-panel" id="aiPanelDecisions" hidden>
-      <form class="ai-decision-form" id="aiDecisionForm">
-        <label>Ситуация<textarea id="aiDecisionSituation" rows="2" placeholder="Например: есть 3 часа свободного времени"></textarea></label>
-        <label>Варианты (по одному на строку)
-          <textarea id="aiDecisionOptions" rows="3" placeholder="Работать над проектом&#10;Отдохнуть"></textarea>
-        </label>
-        <button type="submit" class="btn btn--primary">Разложить последствия</button>
-      </form>
-      <div class="ai-decision-list" id="aiDecisionList"></div>
-    </section>
+        <div class="aiw-bento__side">
+          <div class="aiw-panel aiw-panel--patterns">
+            <header class="aiw-panel__head">
+              <h2>Паттерны</h2>
+              <button class="aiw-iconbtn" id="btnRefreshPatterns" title="Пересчитать паттерны">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+              </button>
+            </header>
+            <div class="aiw-pattern-list" id="aiPatternList"></div>
+          </div>
 
-    <!-- Patterns -->
-    <section class="ai-panel" id="aiPanelPatterns" hidden>
-      <button class="btn" id="btnRefreshPatterns">Пересчитать паттерны</button>
-      <div class="ai-pattern-list" id="aiPatternList"></div>
-    </section>
+          <div class="aiw-panel aiw-panel--reco">
+            <header class="aiw-panel__head"><h2>Рекомендации</h2></header>
+            <div class="aiw-reco-list" id="aiRecommendList"></div>
+          </div>
+        </div>
+      </section>
 
-    <!-- Recommendations -->
-    <section class="ai-panel" id="aiPanelRecommendations" hidden>
-      <div class="ai-recommend-list" id="aiRecommendList"></div>
-    </section>
+      <!-- Timeline -->
+      <section class="aiw-panel aiw-panel--timeline">
+        <header class="aiw-panel__head"><h2>Таймлайн</h2></header>
+        <div class="aiw-timeline" id="aiTimeline"></div>
+      </section>
+    </div>
+
+    <!-- Decisions entry point -->
+    <button class="aiw-fab" id="btnOpenDecisionFab" title="Разбор решений">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5V15.5M8 6.8l7.5 4M8 17.2l7.5-4"/></svg>
+      <span>Решения</span>
+      <span class="aiw-fab__badge" id="aiwDecisionCount" hidden></span>
+    </button>
+
+    <div class="aiw-drawer" id="aiDecisionDrawer" hidden>
+      <div class="aiw-drawer__backdrop" id="aiDecisionBackdrop"></div>
+      <aside class="aiw-drawer__panel">
+        <header class="aiw-drawer__head">
+          <h2>Разбор решений</h2>
+          <button class="aiw-iconbtn" id="btnCloseDecision" title="Закрыть">&times;</button>
+        </header>
+        <form class="aiw-decision-form" id="aiDecisionForm">
+          <label>Ситуация<textarea id="aiDecisionSituation" rows="2" placeholder="Например: есть 3 часа свободного времени"></textarea></label>
+          <label>Варианты (по одному на строку)
+            <textarea id="aiDecisionOptions" rows="3" placeholder="Работать над проектом&#10;Отдохнуть"></textarea>
+          </label>
+          <button type="submit" class="btn btn--primary">Разложить последствия</button>
+        </form>
+        <div class="aiw-decision-list" id="aiDecisionList"></div>
+      </aside>
+    </div>
   </main>
 
 </div>
