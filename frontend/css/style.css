@@ -656,14 +656,25 @@ ul{ list-style:none; margin:0; padding:0; }
 .ov-scenario__signals li{ font-size:12px; line-height:1.5; color: var(--ink-soft); }
 .ov-scenario__next{ margin-top:6px; font-size:12px; color: var(--ink-faint); font-style:italic; }
 
-/* ---- Единый блок AI-анализа (Contact Intelligence + Глубокий отчёт +
-   AI Overview за одну кнопку, см. contacts.js combinedAiPanelHTML) ---- */
+/* ---- Три независимых раздела AI-анализа (Contact Intelligence,
+   Глубокий отчёт, AI Overview) — каждый со своей кнопкой ↻ и своим
+   запросом, см. contacts.js combinedAiPanelHTML. Раньше была одна общая
+   кнопка на все три сразу, но это упиралось в лимит запросов Gemini. ---- */
 .ai-panel--combined{ padding-bottom:16px; }
 .ai-combined__label{
   display:flex; align-items:center; gap:6px;
   font-size:12px; font-weight:700; color: var(--ink-soft); text-transform:uppercase; letter-spacing:.03em;
 }
 .ai-combined__section{ margin-top:10px; }
+.ai-combined__refresh{
+  margin-left:auto; flex:none; width:22px; height:22px; display:flex; align-items:center; justify-content:center;
+  border:none; border-radius:6px; background:transparent; color: var(--ink-faint); cursor:pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.ai-combined__refresh:hover{ background: var(--surface-2); color: var(--ink); }
+.ai-combined__refresh:disabled{ opacity:.5; cursor:default; }
+.ai-combined__refresh svg{ transition: transform .5s ease; }
+.ai-combined__refresh.is-spinning svg{ animation: ai-spin .8s linear infinite; }
 .ai-combined__divider{
   display:flex; align-items:center; gap:8px; margin:18px 0 2px;
   font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;

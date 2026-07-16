@@ -401,19 +401,36 @@ const Contacts = (() => {
     local: "локально",
   };
 
+  // Раньше был один общий "full-scan": одна кнопка запускала Contact
+  // Intelligence + Глубокий отчёт + AI Overview подряд за один клик, что
+  // на бесплатном тарифе Gemini упиралось в лимит запросов (429) почти
+  // при каждом использовании. Вернули как было исходно — три независимых
+  // раздела, каждый со своей кнопкой обновления и своим состоянием
+  // загрузки, запускаются по отдельности и в удобное пользователю время.
+  const sectionLoading = { ci: {}, dr: {}, ov: {} }; // contactId -> bool, по каждому разделу отдельно
+
+  function refreshBtnHTML(id, title, isLoading) {
+    return `
+      <button class="ai-combined__refresh ${isLoading ? "is-spinning" : ""}" id="${id}" type="button" title="${title}" ${isLoading ? "disabled" : ""}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+      </button>`;
+  }
+
   function ciSectionHTML(c) {
     const badge = Utils.aiScoreBadge(c.analyzed_at ? c.interest_score : null);
     const hasSuggestion = c.analyzed_at && c.suggested_status && c.suggested_status !== c.status;
     const sourceLabel = AI_SOURCE_LABELS[c.ai_source] || "локально";
     const isLlm = c.analyzed_at && c.ai_source && c.ai_source !== "local";
+    const isLoading = !!sectionLoading.ci[c.id];
     return `
       <div class="ai-combined__section">
         <div class="ai-combined__label">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
           Contact Intelligence
           ${c.analyzed_at ? `<span class="ai-panel__source" title="${isLlm ? "Summary и следующее действие сгенерированы внешним API" : "Посчитано локально, без внешних сервисов"}">${sourceLabel}</span>` : ""}
+          ${refreshBtnHTML("btnRunCI", "Обновить Contact Intelligence", isLoading)}
         </div>
-        ${c.analyzed_at ? `
+        ${isLoading ? `<div class="ai-panel__empty">Считаем интерес по переписке…</div>` : c.analyzed_at ? `
         <div class="ai-panel__score">
           <span class="ai-badge ai-badge--${badge.cls} ai-badge--lg">${c.interest_score}<small>/100</small></span>
           <div class="ai-panel__score-meta">
@@ -435,7 +452,7 @@ const Contacts = (() => {
           <button class="btn btn--sm" id="btnCopySuggestedReply" type="button">Скопировать</button>
         </div>` : ""}
         ` : `
-        <div class="ai-panel__empty">Анализ ещё не запускался. Нажмите «Обновить AI-анализ» вверху, чтобы оценить интерес по переписке.</div>
+        <div class="ai-panel__empty">Анализ ещё не запускался. Нажмите ↻ рядом с заголовком, чтобы оценить интерес по переписке.</div>
         `}
       </div>`;
   }
@@ -470,6 +487,7 @@ const Contacts = (() => {
       <div class="ai-combined__label">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
         Глубокий AI-отчёт <span class="ai-panel__source">Gemini</span>
+        ${refreshBtnHTML("btnRunDR", "Обновить глубокий AI-отчёт (запрос к Gemini)", st.loading)}
       </div>`;
 
     if (st.loading) {
@@ -511,7 +529,7 @@ const Contacts = (() => {
     return `
       <div class="ai-combined__section">
         ${label}
-        <div class="ai-panel__empty">${st.skipReason ? Utils.escapeHtml(st.skipReason) : "Развёрнутый разбор: инициатива, вложенность, флирт, красные/зелёные флаги, ваши ошибки и рекомендации — по всей переписке. Нажмите «Обновить AI-анализ» вверху."}</div>
+        <div class="ai-panel__empty">${st.skipReason ? Utils.escapeHtml(st.skipReason) : "Развёрнутый разбор: инициатива, вложенность, флирт, красные/зелёные флаги, ваши ошибки и рекомендации — по всей переписке. Нажмите ↻ рядом с заголовком."}</div>
       </div>`;
   }
 
@@ -568,6 +586,7 @@ const Contacts = (() => {
       <div class="ai-combined__label">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg>
         AI Overview <span class="ai-panel__source">${st.data && st.data.source === "local" ? "локально" : "Gemini"}</span>
+        ${refreshBtnHTML("btnRunOV", "Обновить AI Overview", st.loading)}
       </div>`;
 
     if (st.loading) {
@@ -594,7 +613,7 @@ const Contacts = (() => {
     return `
       <div class="ai-combined__section">
         ${label}
-        <div class="ai-panel__empty">Картина ситуации и возможные сценарии развития — по фактам, событиям, переписке (которую AI Overview сканирует сам) и прошлым анализам. Нажмите «Обновить AI-анализ» вверху.</div>
+        <div class="ai-panel__empty">Картина ситуации и возможные сценарии развития — по фактам, событиям, переписке (которую AI Overview сканирует сам) и прошлым анализам. Нажмите ↻ рядом с заголовком.</div>
       </div>`;
   }
 
@@ -605,15 +624,16 @@ const Contacts = (() => {
     return "фактов";
   }
 
-  // ---------- Единый блок AI-анализа: Contact Intelligence + Глубокий
-  // AI-отчёт + AI Overview за одну кнопку и один поход в Telegram/Gemini
-  // (см. POST /{contact_id}/full-scan в backend/routers/contacts.py). ----------
-  const combinedLoading = {}; // contactId -> bool, пока идёт полный скан
+  // ---------- Единый блок AI-анализа: три раздела (Contact Intelligence,
+  // Глубокий AI-отчёт, AI Overview), каждый обновляется НЕЗАВИСИМО, своей
+  // кнопкой ↻ и своим запросом к бэкенду. Раньше был единый "full-scan" —
+  // одна кнопка запускала все три подряд почти без пауз, что на
+  // бесплатном тарифе Gemini регулярно упиралось в лимит запросов (429).
+  // /{id}/full-scan остался в бэкенде, но фронтенд его больше не вызывает.
 
   function combinedAiInner(c) {
     const drSt = deepReportState[c.id] || { loading: false, data: null, attempted: false };
     const ovSt = overviewState[c.id] || { loading: false, data: null, attempted: false };
-    const isLoading = !!combinedLoading[c.id];
 
     return `
       <div class="ai-panel__head">
@@ -621,15 +641,12 @@ const Contacts = (() => {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
           AI-анализ
         </div>
-        <button class="btn btn--icon ${isLoading ? "is-spinning" : ""}" id="btnFullAiScan" title="Обновить AI-анализ: Contact Intelligence, глубокий отчёт и AI Overview за один раз" type="button">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
-        </button>
       </div>
 
       ${ciSectionHTML(c)}
-      ${c.telegram_id ? `<div class="ai-combined__divider"><span>Глубокий AI-отчёт</span></div>${drSectionHTML(c, isLoading ? { ...drSt, loading: true } : drSt)}` : ""}
+      ${c.telegram_id ? `<div class="ai-combined__divider"><span>Глубокий AI-отчёт</span></div>${drSectionHTML(c, drSt)}` : ""}
       <div class="ai-combined__divider"><span>AI Overview</span></div>
-      ${ovSectionHTML(c, isLoading ? { ...ovSt, loading: true } : ovSt)}
+      ${ovSectionHTML(c, ovSt)}
     `;
   }
 
@@ -645,25 +662,57 @@ const Contacts = (() => {
   }
 
   function wireCombinedAiButtons(c) {
-    const btn = document.getElementById("btnFullAiScan");
-    if (btn) btn.addEventListener("click", () => runFullScan(c));
+    const btnCI = document.getElementById("btnRunCI");
+    if (btnCI) btnCI.addEventListener("click", () => runAnalyze(c));
+    const btnDR = document.getElementById("btnRunDR");
+    if (btnDR) btnDR.addEventListener("click", () => runDeepReport(c));
+    const btnOV = document.getElementById("btnRunOV");
+    if (btnOV) btnOV.addEventListener("click", () => runOverview(c));
   }
 
-  async function runFullScan(c) {
-    combinedLoading[c.id] = true;
+  async function runAnalyze(c) {
+    sectionLoading.ci[c.id] = true;
     patchCombinedAiBox(c);
     try {
-      const data = await API.fullAiScan(c.id);
-      deepReportState[c.id] = { loading: false, data: data.deep_report || null, attempted: true, skipReason: data.deep_report_skipped_reason || null };
-      overviewState[c.id] = { loading: false, data: data.overview, attempted: true };
-      combinedLoading[c.id] = false;
+      await API.analyzeContact(c.id);
+      sectionLoading.ci[c.id] = false;
       const fresh = await API.getContact(c.id);
       if (activeId === c.id) renderDetail(fresh);
-      Utils.toast(data.overview.new_facts_count ? `Анализ обновлён · найдено новых фактов: ${data.overview.new_facts_count}` : "Анализ обновлён");
+      Utils.toast("Contact Intelligence обновлён");
     } catch (err) {
-      combinedLoading[c.id] = false;
+      sectionLoading.ci[c.id] = false;
       if (activeId === c.id) patchCombinedAiBox(c);
-      Utils.toast(err.message || "Не удалось выполнить AI-анализ");
+      Utils.toast(err.message || "Не удалось обновить Contact Intelligence");
+    }
+  }
+
+  async function runDeepReport(c) {
+    deepReportState[c.id] = { ...(deepReportState[c.id] || {}), loading: true };
+    patchCombinedAiBox(c);
+    try {
+      const data = await API.generateDeepReport(c.id);
+      deepReportState[c.id] = { loading: false, data, attempted: true };
+      if (activeId === c.id) patchCombinedAiBox(c);
+      Utils.toast("Глубокий AI-отчёт обновлён");
+    } catch (err) {
+      deepReportState[c.id] = { loading: false, data: null, attempted: true, skipReason: err.message };
+      if (activeId === c.id) patchCombinedAiBox(c);
+      Utils.toast(err.message || "Не удалось построить глубокий отчёт");
+    }
+  }
+
+  async function runOverview(c) {
+    overviewState[c.id] = { ...(overviewState[c.id] || {}), loading: true };
+    patchCombinedAiBox(c);
+    try {
+      const data = await API.generateOverview(c.id);
+      overviewState[c.id] = { loading: false, data, attempted: true };
+      if (activeId === c.id) patchCombinedAiBox(c);
+      Utils.toast(data.new_facts_count ? `AI Overview обновлён · найдено новых фактов: ${data.new_facts_count}` : "AI Overview обновлён");
+    } catch (err) {
+      overviewState[c.id] = { loading: false, data: null, attempted: true };
+      if (activeId === c.id) patchCombinedAiBox(c);
+      Utils.toast(err.message || "Не удалось обновить AI Overview");
     }
   }
 
