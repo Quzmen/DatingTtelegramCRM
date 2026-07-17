@@ -14,12 +14,14 @@ Runs fully locally: SQLite file on disk, static frontend served by
 this same process. No external services except Telegram/Gemini.
 """
 import logging
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import sqlalchemy as sa
 from telethon.errors import AuthKeyUnregisteredError, FloodWaitError
 
 from . import models
@@ -31,7 +33,27 @@ from . import crud
 logger = logging.getLogger("telegram-crm")
 
 models.Base.metadata.create_all(bind=engine)
-run_migrations()
+
+# run_migrations() делает много последовательных обращений к БД, чтобы
+# проверить схему каждой таблицы (по одному запросу на таблицу) — на
+# облачных БД (Supabase/Render) изредка бывает разовый сетевой сбой
+# (например SSL-соединение обрывается ровно посреди одного из этих
+# запросов), из-за которого раньше падал весь процесс и контейнер не
+# поднимался вообще, требуя ручного redeploy. Ошибка транзитная и почти
+# всегда пропадает при повторной попытке, поэтому пробуем несколько раз
+# с небольшой паузой, прежде чем сдаться и уронить старт по-настоящему.
+for attempt in range(1, 4):
+    try:
+        run_migrations()
+        break
+    except sa.exc.OperationalError:
+        if attempt == 3:
+            raise
+        logger.warning(
+            "run_migrations(): временная ошибка соединения с БД (попытка %s/3), повтор через 2 сек",
+            attempt,
+        )
+        time.sleep(2)
 
 app = FastAPI(title="Telegram Contacts CRM", version="2.0.0")
 
