@@ -143,15 +143,10 @@ async def _invalidate_current_user_session(request: Request) -> None:
     текущего пользователя запроса (по cookie crm_session), а не всех
     сразу -- у каждого свой независимый Telegram-аккаунт."""
     from .auth import get_optional_user
-    from .database import SessionLocal as _SessionLocal
 
-    db = _SessionLocal()
-    try:
-        user = await get_optional_user(request, db)
-        if user is not None:
-            await get_telegram_service(user.id).invalidate_session()
-    finally:
-        db.close()
+    user = await get_optional_user(request)
+    if user is not None:
+        await get_telegram_service(user.id).invalidate_session()
 
 
 @app.exception_handler(AuthKeyUnregisteredError)

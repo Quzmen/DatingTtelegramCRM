@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas, models, config, media_manager
-from ..database import get_db
+from ..database import get_db, SessionLocal
 from ..auth import get_current_user
 from ..telegram_service import get_telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
 
@@ -48,17 +48,21 @@ async def logout(current_user: models.User = Depends(get_current_user)):
 
 
 @router.get("/contacts", response_model=List[schemas.TelegramContactOut])
-async def list_telegram_contacts(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+async def list_telegram_contacts(current_user: models.User = Depends(get_current_user)):
     try:
         contacts = await get_telegram_service(current_user.id).fetch_contacts()
     except TelegramAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-    existing_ids = {
-        row[0] for row in db.query(models.Contact.telegram_id)
-        .filter(models.Contact.telegram_id.isnot(None), models.Contact.user_id == current_user.id)
-        .all()
-    }
+    db = SessionLocal()
+    try:
+        existing_ids = {
+            row[0] for row in db.query(models.Contact.telegram_id)
+            .filter(models.Contact.telegram_id.isnot(None), models.Contact.user_id == current_user.id)
+            .all()
+        }
+    finally:
+        db.close()
     for c in contacts:
         c["already_imported"] = c["telegram_id"] in existing_ids
     return contacts
@@ -66,7 +70,7 @@ async def list_telegram_contacts(db: Session = Depends(get_db), current_user: mo
 
 @router.post("/import", response_model=schemas.TelegramImportResultOut)
 async def import_contacts(
-    data: schemas.TelegramImportIn, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user),
+    data: schemas.TelegramImportIn, current_user: models.User = Depends(get_current_user),
 ):
     try:
         all_contacts = await get_telegram_service(current_user.id).fetch_contacts()
@@ -78,7 +82,11 @@ async def import_contacts(
     if not selected:
         raise HTTPException(status_code=400, detail="Ни один из выбранных контактов не найден в Telegram")
 
-    return crud.import_telegram_contacts(db, current_user.id, selected, data.default_status, data.tags or [])
+    db = SessionLocal()
+    try:
+        return crud.import_telegram_contacts(db, current_user.id, selected, data.default_status, data.tags or [])
+    finally:
+        db.close()
 
 
 @router.post("/resolve", response_model=schemas.TelegramUserOut)
@@ -96,7 +104,7 @@ async def resolve_username(data: schemas.TelegramResolveIn, current_user: models
 @router.get("/dialogs", response_model=List[schemas.TelegramDialogOut])
 async def list_dialogs(
     limit: int = 100, folder_id: Optional[int] = None,
-    db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ):
     try:
         dialogs = await get_telegram_service(current_user.id).list_dialogs(limit=limit)
@@ -108,7 +116,21 @@ async def list_dialogs(
     # они хранятся отдельно в локальной таблице dialogs (models.Dialog).
     # Дозаполняем folder_id одним запросом и, если папка запрошена,
     # фильтруем результат по ней.
-    folder_map = crud.get_folder_ids_by_telegram_id(db, current_user.id)
+    #
+    # Соединение с БД открываем ТОЛЬКО здесь, уже после вызова
+    # Telegram -- а не через Depends(get_db) в сигнатуре выше. Тот
+    # вариант брал соединение из пула ещё до list_dialogs() и держал
+    # его занятым простаивающим все то время, что уходит на разговор
+    # с Telegram (до CONNECT_TIMEOUT=20с при нестабильной сессии/
+    # прокси) -- а это самый часто опрашиваемый с фронтенда эндпоинт,
+    # так что пул исчерпывался за секунды и клал заодно и остальные,
+    # никак не связанные с Telegram запросы (см. QueuePool TimeoutError
+    # в логах).
+    db = SessionLocal()
+    try:
+        folder_map = crud.get_folder_ids_by_telegram_id(db, current_user.id)
+    finally:
+        db.close()
     for d in dialogs:
         d["folder_id"] = folder_map.get(d["telegram_id"])
 
