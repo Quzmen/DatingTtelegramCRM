@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import sqlalchemy as sa
-from telethon.errors import AuthKeyUnregisteredError, FloodWaitError
+from telethon.errors import AuthKeyUnregisteredError, AuthKeyDuplicatedError, FloodWaitError
 
 from . import models
 from .database import engine, run_migrations, SessionLocal
@@ -138,16 +138,10 @@ async def _handle_flood_wait(request: Request, exc: FloodWaitError):
     )
 
 
-@app.exception_handler(AuthKeyUnregisteredError)
-async def _handle_auth_key_unregistered(request: Request, exc: AuthKeyUnregisteredError):
-    """Сохранённая StringSession больше не действительна на стороне
-    Telegram (например, сессию завершили вручную в настройках Telegram,
-    либо строка была скопирована из другого места окружения). Ловим это
-    централизованно для всех /api/telegram/* эндпоинтов, чтобы вместо
-    вечной 500-й пользователь увидел понятный 401 и экран повторного
-    входа. Инвалидируем сессию ТОЛЬКО текущего пользователя запроса
-    (по cookie crm_session), а не всех сразу -- у каждого свой
-    независимый Telegram-аккаунт."""
+async def _invalidate_current_user_session(request: Request) -> None:
+    """Общая часть для обработчиков ниже: инвалидирует сессию ТОЛЬКО
+    текущего пользователя запроса (по cookie crm_session), а не всех
+    сразу -- у каждого свой независимый Telegram-аккаунт."""
     from .auth import get_optional_user
     from .database import SessionLocal as _SessionLocal
 
@@ -159,9 +153,48 @@ async def _handle_auth_key_unregistered(request: Request, exc: AuthKeyUnregister
     finally:
         db.close()
 
+
+@app.exception_handler(AuthKeyUnregisteredError)
+async def _handle_auth_key_unregistered(request: Request, exc: AuthKeyUnregisteredError):
+    """Сохранённая StringSession больше не действительна на стороне
+    Telegram (например, сессию завершили вручную в настройках Telegram,
+    либо строка была скопирована из другого места окружения). Ловим это
+    централизованно для всех /api/telegram/* эндпоинтов, чтобы вместо
+    вечной 500-й пользователь увидел понятный 401 и экран повторного
+    входа."""
+    await _invalidate_current_user_session(request)
     return JSONResponse(
         status_code=401,
         content={"detail": "Сессия Telegram недействительна, войдите заново"},
+    )
+
+
+@app.exception_handler(AuthKeyDuplicatedError)
+async def _handle_auth_key_duplicated(request: Request, exc: AuthKeyDuplicatedError):
+    """Тот же авторизационный ключ (StringSession) был одновременно
+    использован с двух разных IP -- Telegram в этом случае необратимо
+    убивает ключ на своей стороне (обычно из-за того, что одна и та же
+    сессия одновременно активна и на Render/через прокси, и где-то ещё
+    -- например, локальный запуск с той же БД, или прокси с нестабильным
+    исходящим IP). Ретраить нечего, сессия мертва в любом случае --
+    инвалидируем её и просим войти заново, как и при
+    AuthKeyUnregisteredError выше."""
+    logger.warning(
+        "AuthKeyDuplicatedError на %s: сессия использовалась с двух IP одновременно, "
+        "инвалидирую и требую повторный вход",
+        request.url.path,
+    )
+    await _invalidate_current_user_session(request)
+    return JSONResponse(
+        status_code=401,
+        content={
+            "detail": (
+                "Сессия Telegram использовалась одновременно с двух разных "
+                "адресов и была отключена Telegram. Войдите заново -- и "
+                "убедитесь, что этот аккаунт не залогинен где-то ещё "
+                "(например, локально) через ту же сессию."
+            )
+        },
     )
 
 
