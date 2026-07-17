@@ -179,8 +179,47 @@ def run_migrations():
                 conn.execute(sa.text("ALTER TABLE media_files ADD COLUMN folder_id INTEGER"))
 
     # Переход на многопользовательский режим (см. models.User/UserSession) —
-    # users/user_sessions создаются автоматически через create_all, как
-    # новые таблицы, а вот telegram_settings.user_id нужно долить
+    # в норме users/user_sessions создаются автоматически через create_all,
+    # как новые таблицы. Но create_all() создаёт ТОЛЬКО отсутствующие
+    # таблицы целиком и никогда не добавляет колонки в уже существующую
+    # таблицу — а на некоторых базах таблица users уже существует (осталась
+    # от более ранней версии/эксперимента), просто без нужных колонок.
+    # Раньше это приводило к UndefinedColumn при первом же входе через
+    # Telegram ("column users.telegram_id does not exist"). Долив тот же
+    # защитный ALTER TABLE ADD COLUMN, что и для остальных таблиц выше.
+    # unique=True из models.User здесь намеренно не навязываем: если в
+    # таблице уже есть строки, наложить UNIQUE/NOT NULL можно только после
+    # того как в них появятся корректные значения, а это не задача
+    # автоматической миграции схемы при каждом старте (см. также
+    # migrate_backfill_user_id.py — тот же принцип для user_id).
+    if "users" in inspector.get_table_names():
+        users_columns = {c["name"] for c in inspector.get_columns("users")}
+        users_new_columns = {
+            "telegram_id": "BIGINT",
+            "name": "VARCHAR(150)",
+            "username": "VARCHAR(100)",
+            "phone": "VARCHAR(30)",
+            "created_at": "TIMESTAMP",
+            "last_login_at": "TIMESTAMP",
+        }
+        with engine.begin() as conn:
+            for column_name, ddl_type in users_new_columns.items():
+                if column_name not in users_columns:
+                    conn.execute(sa.text(f"ALTER TABLE users ADD COLUMN {column_name} {ddl_type}"))
+
+    if "user_sessions" in inspector.get_table_names():
+        session_columns = {c["name"] for c in inspector.get_columns("user_sessions")}
+        session_new_columns = {
+            "token": "VARCHAR(64)",
+            "user_id": "INTEGER",
+            "created_at": "TIMESTAMP",
+        }
+        with engine.begin() as conn:
+            for column_name, ddl_type in session_new_columns.items():
+                if column_name not in session_columns:
+                    conn.execute(sa.text(f"ALTER TABLE user_sessions ADD COLUMN {column_name} {ddl_type}"))
+
+    # telegram_settings.user_id нужно долить
     # существующим базам, как и остальные колонки выше. Оставляем
     # nullable=True — старая "ничья" строка (user_id IS NULL) означает
     # сессию ещё не перенесённого единственного аккаунта из
