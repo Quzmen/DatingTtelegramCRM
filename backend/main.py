@@ -1,13 +1,19 @@
 """
 Telegram Contacts CRM - FastAPI application.
 
+Многопользовательский режим: единственный способ входа — Telegram
+(см. routers/auth.py, /api/auth/*), после чего каждый запрос к
+защищённым эндпоинтам проверяется зависимостью get_current_user по
+cookie crm_session (см. auth.py). Отдельного Basic Auth перед всем
+приложением больше нет — раньше он использовался как единственная
+защита однопользовательской версии (переменная окружения APP_USERS),
+но теперь у каждого пользователя CRM собственный логин через Telegram
+и собственные данные, изолированные по user_id.
+
 Runs fully locally: SQLite file on disk, static frontend served by
-this same process. No external services, no network calls.
+this same process. No external services except Telegram/Gemini.
 """
-import base64
 import logging
-import os
-import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -18,8 +24,8 @@ from telethon.errors import AuthKeyUnregisteredError, FloodWaitError
 
 from . import models
 from .database import engine, run_migrations, SessionLocal
-from .routers import contacts, dashboard, telegram, admin, folders, campaigns, media, ai_insights
-from .telegram_service import telegram_service
+from .routers import contacts, dashboard, telegram, admin, folders, campaigns, media, ai_insights, auth as auth_router
+from .telegram_service import get_telegram_service
 from . import crud
 
 logger = logging.getLogger("telegram-crm")
@@ -27,8 +33,9 @@ logger = logging.getLogger("telegram-crm")
 models.Base.metadata.create_all(bind=engine)
 run_migrations()
 
-app = FastAPI(title="Telegram Contacts CRM", version="1.0.0")
+app = FastAPI(title="Telegram Contacts CRM", version="2.0.0")
 
+app.include_router(auth_router.router)
 app.include_router(contacts.router)
 app.include_router(dashboard.router)
 app.include_router(telegram.router)
@@ -41,16 +48,28 @@ app.include_router(ai_insights.router)
 
 @app.on_event("startup")
 async def _sync_telegram_on_startup() -> None:
-    """Если аккаунт уже был авторизован в прошлый раз (сессия лежит в
-    БД -- см. TelegramService._load_session_string), поднимаем кэш
-    диалогов сразу при старте, не дожидаясь первого запроса из
-    фронтенда или первого нового сообщения. Best-effort: если Telegram
-    недоступен или аккаунт ещё не авторизован, просто тихо пропускаем --
-    сервис при этом продолжает нормально стартовать."""
+    """Многопользовательский рестарт-синк: если у пользователя уже была
+    авторизованная Telegram-сессия в прошлый раз (см.
+    TelegramService._load_session_string / crud.get_telegram_session_string),
+    поднимаем кэш его диалогов сразу при старте процесса, не дожидаясь
+    первого запроса с фронтенда или первого нового сообщения — для
+    КАЖДОГО такого пользователя по очереди, а не только для одного
+    глобального аккаунта, как было в однопользовательском режиме.
+    Best-effort на каждого пользователя отдельно: если для одного
+    Telegram недоступен или сессия истекла, это не должно останавливать
+    синхронизацию остальных и не должно ронять старт сервиса."""
+    db = SessionLocal()
     try:
-        await telegram_service.sync_now()
-    except Exception:
-        logger.exception("Не удалось выполнить синхронизацию диалогов при старте")
+        user_ids = [row[0] for row in db.query(models.TelegramSettings.user_id)
+                    .filter(models.TelegramSettings.user_id.isnot(None)).distinct().all()]
+    finally:
+        db.close()
+
+    for user_id in user_ids:
+        try:
+            await get_telegram_service(user_id).sync_now()
+        except Exception:
+            logger.exception("Не удалось выполнить синхронизацию диалогов при старте (user_id=%s)", user_id)
 
     # Восстанавливать незавершённые кампании (см. СИНХРОНИЗАЦИЯ ТЗ):
     # если процесс упал/перезапустился, пока кампания была RUNNING,
@@ -58,6 +77,8 @@ async def _sync_telegram_on_startup() -> None:
     # кампании в PAUSED -- не резюмируем автоматически, чтобы не
     # разослать сообщения повторно без ведома пользователя; из PAUSED
     # их можно осознанно продолжить через /resume, и cursor не потерян.
+    # Работает сразу по всем пользователям -- list_stuck_running_campaigns
+    # не фильтрует по user_id намеренно, это разовый служебный обход.
     db = SessionLocal()
     try:
         stuck = crud.list_stuck_running_campaigns(db)
@@ -102,9 +123,20 @@ async def _handle_auth_key_unregistered(request: Request, exc: AuthKeyUnregister
     либо строка была скопирована из другого места окружения). Ловим это
     централизованно для всех /api/telegram/* эндпоинтов, чтобы вместо
     вечной 500-й пользователь увидел понятный 401 и экран повторного
-    входа — без него именно так выглядела ошибка из отчёта:
-    AuthKeyUnregisteredError после потери файла сессии при рестарте."""
-    await telegram_service.invalidate_session()
+    входа. Инвалидируем сессию ТОЛЬКО текущего пользователя запроса
+    (по cookie crm_session), а не всех сразу -- у каждого свой
+    независимый Telegram-аккаунт."""
+    from .auth import get_optional_user
+    from .database import SessionLocal as _SessionLocal
+
+    db = _SessionLocal()
+    try:
+        user = await get_optional_user(request, db)
+        if user is not None:
+            await get_telegram_service(user.id).invalidate_session()
+    finally:
+        db.close()
+
     return JSONResponse(
         status_code=401,
         content={"detail": "Сессия Telegram недействительна, войдите заново"},
@@ -137,66 +169,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         return JSONResponse(status_code=499, content={"detail": "Соединение прервано клиентом"})
     logger.exception("Необработанная ошибка при обработке %s", request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
-
-# ---------------------------------------------------------------
-# Basic Auth перед всем приложением.
-#
-# По умолчанию приложение не требует логина вообще (для запуска на
-# localhost это ок). При деплое на Render сайт становится доступен
-# по публичному URL, поэтому здесь добавлена простая защита: список
-# логин:пароль задаётся переменной окружения APP_USERS
-# (например "me:secret1,friend1:secret2,friend2:secret3" — по
-# паре на каждого, кому нужен доступ к CRM). Если переменная не
-# задана, доступ остаётся открытым — так проще для локальной
-# разработки, но НЕ рекомендуется для публичного деплоя.
-# ---------------------------------------------------------------
-def _load_app_users() -> dict[str, str]:
-    raw = os.environ.get("APP_USERS", "")
-    users: dict[str, str] = {}
-    for pair in raw.split(","):
-        pair = pair.strip()
-        if not pair or ":" not in pair:
-            continue
-        user, _, pwd = pair.partition(":")
-        user, pwd = user.strip(), pwd.strip()
-        if user and pwd:
-            users[user] = pwd
-    return users
-
-
-_APP_USERS = _load_app_users()
-
-if not _APP_USERS:
-    logger.warning(
-        "APP_USERS не задан — приложение работает БЕЗ пароля. "
-        "При публичном деплое обязательно задайте переменную окружения "
-        "APP_USERS (формат login:password,login2:password2)."
-    )
-
-
-@app.middleware("http")
-async def basic_auth_guard(request: Request, call_next):
-    if not _APP_USERS:
-        return await call_next(request)
-    if request.url.path == "/api/health":
-        return await call_next(request)
-
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
-        try:
-            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-            user, _, pwd = decoded.partition(":")
-        except Exception:
-            user, pwd = "", ""
-        expected = _APP_USERS.get(user)
-        if expected is not None and secrets.compare_digest(pwd, expected):
-            return await call_next(request)
-
-    return Response(
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="Telegram CRM"'},
-        content="Требуется авторизация",
-    )
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"

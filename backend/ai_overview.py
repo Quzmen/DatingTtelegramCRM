@@ -54,7 +54,7 @@ OVERVIEW_SYSTEM_PROMPT = """Ты — аналитический модуль AI 
 историю наблюдений: сравни прошлое состояние с текущим, отметь, что \
 изменилось, а что нет. Не игнорируй их и не начинай анализ с нуля.
 
-НУЖНО:
+СТРОГО ЗАПРЕЩЕНО:
 - Использовать в анализе даты/частоту создания записей в CRM, время работы \
 пользователя с приложением или любую статистику активности — это не имеет \
 отношения к задаче, анализируй только содержание.
@@ -201,7 +201,7 @@ def _parse_chat_facts(raw, contact_name: str) -> List[Dict]:
     return out
 
 
-async def _scan_chat_for_facts(db, contact: models.Contact, transcript: str) -> int:
+async def _scan_chat_for_facts(db, user_id: int, contact: models.Contact, transcript: str) -> int:
     """Вычитывает хвост переписки, достаёт факты/планы/договорённости и
     сохраняет новые (без дублей по названию) как AIMemoryItem. Возвращает
     число реально добавленных записей. Тихий откат на 0 при любой ошибке
@@ -225,13 +225,13 @@ async def _scan_chat_for_facts(db, contact: models.Contact, transcript: str) -> 
     from . import crud
     existing_titles = {
         (m.title or "").strip().lower()
-        for m in crud.list_memory_items(db, contact_id=contact.id, limit=200)
+        for m in crud.list_memory_items(db, user_id, contact_id=contact.id, limit=200)
     }
     added = 0
     for item in items:
         if item["title"].strip().lower() in existing_titles:
             continue
-        crud.create_memory_item(db, item, source="ai_overview_scan", contact_id=contact.id)
+        crud.create_memory_item(db, user_id, item, source="ai_overview_scan", contact_id=contact.id)
         existing_titles.add(item["title"].strip().lower())
         added += 1
     return added
@@ -265,13 +265,13 @@ def _parse_scenarios(raw) -> List[Dict]:
     return out
 
 
-def _gather_context(db, contact: models.Contact, transcript: str) -> Dict:
+def _gather_context(db, user_id: int, contact: models.Contact, transcript: str) -> Dict:
     """Собирает три источника данных, описанных в docstring модуля.
     Статистика активности CRM (когда создавались записи и т.п.)
     сознательно НЕ собирается и никуда не попадает."""
     from . import crud
 
-    memory_items = crud.list_memory_items(db, contact_id=contact.id, limit=100)
+    memory_items = crud.list_memory_items(db, user_id, contact_id=contact.id, limit=100)
     facts = [
         {"kind": (m.kind.value if hasattr(m.kind, "value") else m.kind), "title": m.title, "details": m.details}
         for m in memory_items
@@ -283,7 +283,7 @@ def _gather_context(db, contact: models.Contact, transcript: str) -> Dict:
         for i in interactions
     ]
 
-    previous_snapshots = crud.list_ai_overview_snapshots(db, contact.id, limit=2)
+    previous_snapshots = crud.list_ai_overview_snapshots(db, user_id, contact.id, limit=2)
     previous_overviews = [
         {
             "current_state": s.current_state,
@@ -332,7 +332,7 @@ def _build_user_content(contact: models.Contact, context: Dict, transcript: str)
     return "\n\n".join(parts)
 
 
-async def build_overview(db, contact: models.Contact, raw_messages: Optional[list] = None) -> Dict:
+async def build_overview(db, user_id: int, contact: models.Contact, raw_messages: Optional[list] = None) -> Dict:
     """Строит один снимок AI Overview. raw_messages — уже полученные (не
     нормализованные) сообщения Telegram, если есть; функция сама их
     нормализует и обрежет до лимита. При недоступности Gemini — тихий
@@ -344,12 +344,12 @@ async def build_overview(db, contact: models.Contact, raw_messages: Optional[lis
         if messages:
             transcript = ai_common.build_transcript(messages, contact.name, config.AI_LLM_MAX_MESSAGES)
 
-    context = _gather_context(db, contact, transcript)
-    new_facts_count = await _scan_chat_for_facts(db, contact, transcript)
+    context = _gather_context(db, user_id, contact, transcript)
+    new_facts_count = await _scan_chat_for_facts(db, user_id, contact, transcript)
     if new_facts_count:
         # Пересобираем факты/события, чтобы только что найденные записи
         # сразу попали в контекст для сценариев, а не только в БД.
-        context = _gather_context(db, contact, transcript)
+        context = _gather_context(db, user_id, contact, transcript)
     user_content = _build_user_content(contact, context, transcript)
 
     if config.AI_PROVIDER == "gemini" and config.GEMINI_API_KEY:

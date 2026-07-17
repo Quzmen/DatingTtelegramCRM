@@ -30,6 +30,24 @@ const API = (() => {
       headers: { "Content-Type": "application/json" },
       ...options,
     });
+    if (res.status === 401) {
+      // /auth/* сами возвращают 401 как часть обычного flow (например,
+      // GET /auth/me при первой загрузке без активной сессии) — это
+      // не "сессия истекла во время работы", а нормальная проверка на
+      // старте, ею занимается сам Auth.init(). Для всех остальных
+      // эндпоинтов 401 означает, что сессия CRM протухла прямо по
+      // ходу работы — показываем экран входа сразу, а не после того,
+      // как пользователь наткнётся на непонятную ошибку.
+      if (!path.startsWith("/auth/") && window.Auth && typeof window.Auth.handleUnauthorized === "function") {
+        window.Auth.handleUnauthorized();
+      }
+      let detail = "Не авторизовано";
+      try {
+        const body = await res.json();
+        detail = body.detail || detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
     if (res.status === 429) {
       const retryAfterHeader = Number(res.headers.get("Retry-After"));
       let retryAfter = Number.isFinite(retryAfterHeader) ? retryAfterHeader : 30;
@@ -60,7 +78,34 @@ const API = (() => {
     return err && (err.name === "AbortError" || err.code === 20);
   }
 
+  // Общая обработка ответа для мест, которые не идут через request()
+  // (загрузка файлов через FormData) — тот же 401 -> экран входа, что
+  // и в request() выше, чтобы разрыв сессии посреди загрузки файла
+  // тоже сразу показывал форму логина, а не просто ошибку тостом.
+  async function checkRawResponse(res) {
+    if (res.status === 401) {
+      if (window.Auth && typeof window.Auth.handleUnauthorized === "function") {
+        window.Auth.handleUnauthorized();
+      }
+      throw new Error("Сессия истекла, войдите заново");
+    }
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
   return {
+    // auth (вход через Telegram, см. backend/routers/auth.py)
+    authMe: () => request(`/auth/me`),
+    authSendCode: (phone) => request(`/auth/send-code`, { method: "POST", body: JSON.stringify({ phone }) }),
+    authSignIn: (payload) => request(`/auth/sign-in`, { method: "POST", body: JSON.stringify(payload) }),
+    authLogout: () => request(`/auth/logout`, { method: "POST" }),
+
     // contacts
     listContacts: (params = {}) => {
       const qs = new URLSearchParams(
@@ -153,12 +198,7 @@ const API = (() => {
       if (replyTo) form.append("reply_to", replyTo);
       if (voice) form.append("voice", "true");
       const res = await fetch(`${BASE}/telegram/messages/${telegramId}/file`, { method: "POST", body: form });
-      if (!res.ok) {
-        let detail = res.statusText;
-        try { detail = (await res.json()).detail || detail; } catch (_) {}
-        throw new Error(detail);
-      }
-      return res.json();
+      return checkRawResponse(res);
     },
 
     // contacts — telegram link
@@ -179,12 +219,7 @@ const API = (() => {
       const form = new FormData();
       form.append("file", file, file.name || "image.jpg");
       const res = await fetch(`${BASE}/campaigns/${id}/image`, { method: "POST", body: form });
-      if (!res.ok) {
-        let detail = res.statusText;
-        try { detail = (await res.json()).detail || detail; } catch (_) {}
-        throw new Error(detail);
-      }
-      return res.json();
+      return checkRawResponse(res);
     },
     removeCampaignImage: (id) => request(`/campaigns/${id}/image`, { method: "DELETE" }),
     attachCampaignMedia: (id, mediaId) =>
@@ -201,12 +236,7 @@ const API = (() => {
       const form = new FormData();
       [...files].forEach((f) => form.append("files", f, f.name));
       const res = await fetch(`${BASE}/media/upload`, { method: "POST", body: form });
-      if (!res.ok) {
-        let detail = res.statusText;
-        try { detail = (await res.json()).detail || detail; } catch (_) {}
-        throw new Error(detail);
-      }
-      return res.json();
+      return checkRawResponse(res);
     },
     renameMedia: (id, name) => request(`/media/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
     deleteMedia: (id) => request(`/media/${id}`, { method: "DELETE" }),

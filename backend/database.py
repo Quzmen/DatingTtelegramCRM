@@ -6,12 +6,15 @@ Supports:
 - PostgreSQL in production via DATABASE_URL environment variable
 """
 
+import logging
 import os
 from pathlib import Path
 
 import sqlalchemy as sa
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+
+logger = logging.getLogger("telegram-crm")
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -174,3 +177,74 @@ def run_migrations():
         if "folder_id" not in media_columns:
             with engine.begin() as conn:
                 conn.execute(sa.text("ALTER TABLE media_files ADD COLUMN folder_id INTEGER"))
+
+    # Переход на многопользовательский режим (см. models.User/UserSession) —
+    # users/user_sessions создаются автоматически через create_all, как
+    # новые таблицы, а вот telegram_settings.user_id нужно долить
+    # существующим базам, как и остальные колонки выше. Оставляем
+    # nullable=True — старая "ничья" строка (user_id IS NULL) означает
+    # сессию ещё не перенесённого единственного аккаунта из
+    # однопользовательского режима, см. models.TelegramSettings.
+    if "telegram_settings" in inspector.get_table_names():
+        ts_columns = {c["name"] for c in inspector.get_columns("telegram_settings")}
+        if "user_id" not in ts_columns:
+            with engine.begin() as conn:
+                conn.execute(sa.text("ALTER TABLE telegram_settings ADD COLUMN user_id INTEGER"))
+
+    # Многопользовательский режим (продолжение) — user_id на всех
+    # таблицах, которыми владеет пользователь. NULLABLE специально:
+    # существующие строки на старых базах "ничьи" (принадлежат ещё не
+    # перенесённому единственному аккаунту из однопользовательского
+    # режима) — их постепенно проставит явный скрипт переноса данных,
+    # а не эта миграция схемы (она только добавляет колонку).
+    _USER_SCOPED_TABLES = [
+        "contacts", "tags", "interactions", "folders", "dialogs", "messages",
+        "campaigns", "campaign_logs", "media_folders", "media_files", "media_usages",
+        "ai_memory_items", "ai_patterns", "ai_decisions", "ai_overview_snapshots",
+    ]
+    for table_name in _USER_SCOPED_TABLES:
+        if table_name not in inspector.get_table_names():
+            continue
+        columns = {c["name"] for c in inspector.get_columns(table_name)}
+        if "user_id" not in columns:
+            with engine.begin() as conn:
+                conn.execute(sa.text(f"ALTER TABLE {table_name} ADD COLUMN user_id INTEGER"))
+
+    # Старые unique-ограничения на contacts.telegram_id / dialogs.telegram_id /
+    # tags.name / messages(dialog_telegram_id, message_id) были рассчитаны на
+    # одного пользователя на всё приложение — на многопользовательских
+    # данных они не дают двум разным пользователям иметь контакт/диалог
+    # с одним и тем же собеседником Telegram (обычный случай, а не
+    # крайний). models.py уже объявляет новые составные ограничения
+    # (uq_contact_user_telegram_id и т.д.) — они применятся сами через
+    # create_all только на СОВСЕМ новой базе; на существующей базе
+    # старое ограничение остаётся в БД и его нужно снять явно, иначе оно
+    # продолжит бросать IntegrityError. Определяем старое имя constraint
+    # через inspector, а не хардкодим — оно могло называться по-разному
+    # в зависимости от того, кто и когда создавал таблицу.
+    def _drop_old_unique(table_name: str, columns: tuple[str, ...]):
+        if table_name not in inspector.get_table_names():
+            return
+        for uc in inspector.get_unique_constraints(table_name):
+            if tuple(uc.get("column_names") or ()) == columns and uc.get("name"):
+                with engine.begin() as conn:
+                    conn.execute(sa.text(f'ALTER TABLE {table_name} DROP CONSTRAINT "{uc["name"]}"'))
+        # Postgres иногда реализует column-level UNIQUE как индекс, а не
+        # именованный constraint, попробовать через тот же inspector:
+        for ix in inspector.get_indexes(table_name):
+            if ix.get("unique") and tuple(ix.get("column_names") or ()) == columns and ix.get("name"):
+                with engine.begin() as conn:
+                    conn.execute(sa.text(f'DROP INDEX IF EXISTS "{ix["name"]}"'))
+
+    try:
+        _drop_old_unique("contacts", ("telegram_id",))
+        _drop_old_unique("dialogs", ("telegram_id",))
+        _drop_old_unique("tags", ("name",))
+        _drop_old_unique("messages", ("dialog_telegram_id", "message_id"))
+    except Exception:
+        logger.exception(
+            "Не удалось автоматически снять старые unique-ограничения "
+            "(contacts.telegram_id / dialogs.telegram_id / tags.name / "
+            "messages) — если на базе уже есть данные от нескольких "
+            "пользователей, потребуется снять их вручную в БД."
+        )

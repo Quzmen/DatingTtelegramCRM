@@ -34,78 +34,152 @@ def _naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
 # на всё приложение (один Telegram-аккаунт на CRM).
 # ---------------------------------------------------------------
 
-def get_telegram_session_string(db: Session) -> Optional[str]:
-    row = db.query(models.TelegramSettings).order_by(models.TelegramSettings.id).first()
+def get_telegram_session_string(db: Session, user_id: Optional[int] = None) -> Optional[str]:
+    """user_id=None читает "ничью" строку (user_id IS NULL) — сессию
+    ещё не перенесённого единственного аккаунта из
+    однопользовательского режима, см. models.TelegramSettings."""
+    query = db.query(models.TelegramSettings)
+    query = query.filter(models.TelegramSettings.user_id.is_(None)) if user_id is None \
+        else query.filter(models.TelegramSettings.user_id == user_id)
+    row = query.order_by(models.TelegramSettings.id).first()
     return row.session_string if row else None
 
 
-def save_telegram_session_string(db: Session, session_string: str) -> None:
-    row = db.query(models.TelegramSettings).order_by(models.TelegramSettings.id).first()
+def save_telegram_session_string(db: Session, user_id: Optional[int], session_string: str) -> None:
+    query = db.query(models.TelegramSettings)
+    query = query.filter(models.TelegramSettings.user_id.is_(None)) if user_id is None \
+        else query.filter(models.TelegramSettings.user_id == user_id)
+    row = query.order_by(models.TelegramSettings.id).first()
     if row:
         row.session_string = session_string
     else:
-        row = models.TelegramSettings(session_string=session_string)
+        row = models.TelegramSettings(user_id=user_id, session_string=session_string)
         db.add(row)
     db.commit()
 
 
-def clear_telegram_session_string(db: Session) -> None:
-    db.query(models.TelegramSettings).delete()
+def clear_telegram_session_string(db: Session, user_id: Optional[int] = None) -> None:
+    query = db.query(models.TelegramSettings)
+    query = query.filter(models.TelegramSettings.user_id.is_(None)) if user_id is None \
+        else query.filter(models.TelegramSettings.user_id == user_id)
+    query.delete()
     db.commit()
 
 
-def _get_or_create_tags(db: Session, names: List[str]) -> List[models.Tag]:
+# ---------------------------------------------------------------
+# Пользователи CRM (см. models.User) — учётная запись создаётся
+# автоматически при первом входе через Telegram, отдельной
+# регистрации/пароля нет (см. routers/auth.py).
+# ---------------------------------------------------------------
+
+def get_user_by_telegram_id(db: Session, telegram_id: int) -> Optional[models.User]:
+    return db.query(models.User).filter(models.User.telegram_id == telegram_id).first()
+
+
+def get_user(db: Session, user_id: int) -> Optional[models.User]:
+    return db.query(models.User).filter(models.User.id == user_id).first()
+
+
+def get_or_create_user_by_telegram_id(
+    db: Session, telegram_id: int, name: str, username: Optional[str], phone: Optional[str],
+) -> models.User:
+    from datetime import datetime as _dt
+
+    user = get_user_by_telegram_id(db, telegram_id)
+    if user is None:
+        user = models.User(telegram_id=telegram_id, name=name, username=username, phone=phone)
+        db.add(user)
+    else:
+        user.name = name or user.name
+        user.username = username or user.username
+        user.phone = phone or user.phone
+    user.last_login_at = _dt.utcnow()
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def create_user_session(db: Session, user_id: int, token: str) -> models.UserSession:
+    row = models.UserSession(user_id=user_id, token=token)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_user_by_session_token(db: Session, token: str) -> Optional[models.User]:
+    from datetime import datetime as _dt
+
+    row = (
+        db.query(models.UserSession)
+        .filter(models.UserSession.token == token)
+        .first()
+    )
+    if row is None:
+        return None
+    row.last_seen_at = _dt.utcnow()
+    db.commit()
+    return get_user(db, row.user_id)
+
+
+def delete_user_session(db: Session, token: str) -> None:
+    db.query(models.UserSession).filter(models.UserSession.token == token).delete()
+    db.commit()
+
+
+def _get_or_create_tags(db: Session, user_id: int, names: List[str]) -> List[models.Tag]:
     tags = []
     for raw in names:
         clean = raw.strip().lstrip("#")
         if not clean:
             continue
-        tag = db.query(models.Tag).filter(models.Tag.name == clean).first()
+        tag = db.query(models.Tag).filter(models.Tag.user_id == user_id, models.Tag.name == clean).first()
         if not tag:
-            tag = models.Tag(name=clean)
+            tag = models.Tag(user_id=user_id, name=clean)
             db.add(tag)
             db.flush()
         tags.append(tag)
     return tags
 
 
-def create_contact(db: Session, data: schemas.ContactCreate) -> models.Contact:
+def create_contact(db: Session, user_id: int, data: schemas.ContactCreate) -> models.Contact:
     payload = data.model_dump(exclude={"tags"})
-    contact = models.Contact(**payload)
+    contact = models.Contact(user_id=user_id, **payload)
     if data.tags:
-        contact.tags = _get_or_create_tags(db, data.tags)
+        contact.tags = _get_or_create_tags(db, user_id, data.tags)
     db.add(contact)
     db.commit()
     db.refresh(contact)
 
     # seed the history with a "contact created" event
     add_interaction(
-        db, contact.id,
+        db, user_id, contact.id,
         schemas.InteractionCreate(note="Контакт добавлен в CRM", event_type="status_change"),
     )
     return contact
 
 
-def get_contact(db: Session, contact_id: int) -> Optional[models.Contact]:
+def get_contact(db: Session, user_id: int, contact_id: int) -> Optional[models.Contact]:
     return (
         db.query(models.Contact)
         .options(joinedload(models.Contact.tags), joinedload(models.Contact.interactions))
-        .filter(models.Contact.id == contact_id)
+        .filter(models.Contact.id == contact_id, models.Contact.user_id == user_id)
         .first()
     )
 
 
-def get_contact_by_telegram_id(db: Session, telegram_id: int) -> Optional[models.Contact]:
+def get_contact_by_telegram_id(db: Session, user_id: int, telegram_id: int) -> Optional[models.Contact]:
     return (
         db.query(models.Contact)
         .options(joinedload(models.Contact.tags), joinedload(models.Contact.interactions))
-        .filter(models.Contact.telegram_id == telegram_id)
+        .filter(models.Contact.telegram_id == telegram_id, models.Contact.user_id == user_id)
         .first()
     )
 
 
 def list_contacts(
     db: Session,
+    user_id: int,
     search: Optional[str] = None,
     status: Optional[models.ContactStatus] = None,
     tag: Optional[str] = None,
@@ -113,7 +187,7 @@ def list_contacts(
     max_interest: Optional[int] = None,
     sort: str = "-updated_at",
 ) -> List[models.Contact]:
-    query = db.query(models.Contact).options(joinedload(models.Contact.tags))
+    query = db.query(models.Contact).options(joinedload(models.Contact.tags)).filter(models.Contact.user_id == user_id)
 
     if search:
         like = f"%{search}%"
@@ -137,7 +211,7 @@ def list_contacts(
     return query.all()
 
 
-def update_contact(db: Session, contact: models.Contact, data: schemas.ContactUpdate) -> models.Contact:
+def update_contact(db: Session, user_id: int, contact: models.Contact, data: schemas.ContactUpdate) -> models.Contact:
     payload = data.model_dump(exclude_unset=True, exclude={"tags"})
 
     old_status = contact.status
@@ -145,7 +219,7 @@ def update_contact(db: Session, contact: models.Contact, data: schemas.ContactUp
         setattr(contact, field, value)
 
     if data.tags is not None:
-        contact.tags = _get_or_create_tags(db, data.tags)
+        contact.tags = _get_or_create_tags(db, user_id, data.tags)
 
     db.commit()
     db.refresh(contact)
@@ -153,15 +227,15 @@ def update_contact(db: Session, contact: models.Contact, data: schemas.ContactUp
     if "status" in payload and payload["status"] != old_status:
         label = models.STATUS_LABELS.get(models.ContactStatus(payload["status"]), payload["status"])
         add_interaction(
-            db, contact.id,
+            db, user_id, contact.id,
             schemas.InteractionCreate(note=f"Статус изменён на «{label}»", event_type="status_change"),
         )
 
     return contact
 
 
-def update_status(db: Session, contact: models.Contact, status: models.ContactStatus) -> models.Contact:
-    return update_contact(db, contact, schemas.ContactUpdate(status=status))
+def update_status(db: Session, user_id: int, contact: models.Contact, status: models.ContactStatus) -> models.Contact:
+    return update_contact(db, user_id, contact, schemas.ContactUpdate(status=status))
 
 
 def delete_contact(db: Session, contact: models.Contact) -> None:
@@ -169,8 +243,17 @@ def delete_contact(db: Session, contact: models.Contact) -> None:
     db.commit()
 
 
-def add_interaction(db: Session, contact_id: int, data: schemas.InteractionCreate) -> models.Interaction:
+def add_interaction(db: Session, user_id: int, contact_id: int, data: schemas.InteractionCreate) -> Optional[models.Interaction]:
+    # contact_id может прийти напрямую из пути запроса (не всегда уже
+    # проверенный объект models.Contact) -- проверяем принадлежность
+    # пользователю здесь же, а не полагаемся на то, что вызывающий
+    # роутер это сделал.
+    contact = db.query(models.Contact).filter(models.Contact.id == contact_id, models.Contact.user_id == user_id).first()
+    if contact is None:
+        return None
+
     interaction = models.Interaction(
+        user_id=user_id,
         contact_id=contact_id,
         note=data.note,
         event_type=data.event_type,
@@ -178,8 +261,7 @@ def add_interaction(db: Session, contact_id: int, data: schemas.InteractionCreat
     )
     db.add(interaction)
 
-    contact = db.query(models.Contact).filter(models.Contact.id == contact_id).first()
-    if contact and data.event_type not in ("status_change", "ai_analysis"):
+    if data.event_type not in ("status_change", "ai_analysis"):
         contact.last_contact_at = interaction.occurred_at
 
     db.commit()
@@ -192,24 +274,27 @@ def delete_interaction(db: Session, interaction: models.Interaction) -> None:
     db.commit()
 
 
-def get_all_tags(db: Session) -> List[models.Tag]:
-    return db.query(models.Tag).order_by(models.Tag.name).all()
+def get_all_tags(db: Session, user_id: int) -> List[models.Tag]:
+    return db.query(models.Tag).filter(models.Tag.user_id == user_id).order_by(models.Tag.name).all()
 
 
 def import_telegram_contacts(
-    db: Session, tg_contacts: List[dict], default_status: models.ContactStatus, tags: List[str]
+    db: Session, user_id: int, tg_contacts: List[dict], default_status: models.ContactStatus, tags: List[str]
 ) -> schemas.TelegramImportResultOut:
     """Создаёт CRM-контакты из выбранных контактов Telegram-аккаунта.
 
-    Контакты с telegram_id, которые уже есть в базе, пропускаются --
-    повторный импорт безопасен и не плодит дубликаты.
+    Контакты с telegram_id, которые уже есть в базе У ЭТОГО
+    пользователя, пропускаются -- повторный импорт безопасен и не
+    плодит дубликаты. Тот же telegram_id у ДРУГОГО пользователя CRM —
+    отдельный, отдельно импортируемый контакт (см. models.Contact:
+    уникальность теперь по паре user_id+telegram_id).
     """
     imported = 0
     skipped = 0
     for tg in tg_contacts:
         exists = (
             db.query(models.Contact)
-            .filter(models.Contact.telegram_id == tg["telegram_id"])
+            .filter(models.Contact.telegram_id == tg["telegram_id"], models.Contact.user_id == user_id)
             .first()
         )
         if exists:
@@ -217,6 +302,7 @@ def import_telegram_contacts(
             continue
 
         contact = models.Contact(
+            user_id=user_id,
             name=tg["name"],
             username=tg.get("username"),
             telegram_id=tg["telegram_id"],
@@ -224,13 +310,13 @@ def import_telegram_contacts(
             status=default_status,
         )
         if tags:
-            contact.tags = _get_or_create_tags(db, tags)
+            contact.tags = _get_or_create_tags(db, user_id, tags)
         db.add(contact)
         db.flush()
         imported += 1
 
         add_interaction(
-            db, contact.id,
+            db, user_id, contact.id,
             schemas.InteractionCreate(note="Контакт импортирован из Telegram", event_type="status_change"),
         )
 
@@ -238,10 +324,11 @@ def import_telegram_contacts(
     return schemas.TelegramImportResultOut(imported=imported, skipped=skipped)
 
 
-def contacts_needing_attention(db: Session) -> List[models.Contact]:
+def contacts_needing_attention(db: Session, user_id: int) -> List[models.Contact]:
     threshold = datetime.utcnow() - timedelta(days=ATTENTION_THRESHOLD_DAYS)
     return (
         db.query(models.Contact)
+        .filter(models.Contact.user_id == user_id)
         .filter(models.Contact.status != models.ContactStatus.ARCHIVE)
         .filter(
             or_(
@@ -286,10 +373,10 @@ def save_deep_report(db: Session, contact: models.Contact, result: dict) -> mode
     return contact
 
 
-def apply_suggested_status(db: Session, contact: models.Contact) -> models.Contact:
+def apply_suggested_status(db: Session, user_id: int, contact: models.Contact) -> models.Contact:
     if not contact.suggested_status or contact.suggested_status == contact.status:
         return contact
-    return update_status(db, contact, contact.suggested_status)
+    return update_status(db, user_id, contact, contact.suggested_status)
 
 
 _EVENT_TITLES = {
@@ -321,12 +408,12 @@ def get_timeline(db: Session, contact: models.Contact) -> List[dict]:
     return events
 
 
-def get_reminders(db: Session) -> List[dict]:
+def get_reminders(db: Session, user_id: int) -> List[dict]:
     """Follow-up напоминания: контакты, которые давно не отвечали, но
     не в архиве. Используется список contacts_needing_attention как
     основа, поверх него формируется человекочитаемый текст."""
     reminders = []
-    for c in contacts_needing_attention(db):
+    for c in contacts_needing_attention(db, user_id):
         days = (datetime.utcnow() - c.last_contact_at).days if c.last_contact_at else None
         if days is None:
             text = f"{c.name}: переписки ещё не было — напишите первым."
@@ -345,11 +432,15 @@ def get_reminders(db: Session) -> List[dict]:
     return reminders
 
 
-def get_dashboard(db: Session) -> schemas.DashboardOut:
-    total = db.query(models.Contact).count()
+def get_dashboard(db: Session, user_id: int) -> schemas.DashboardOut:
+    total = db.query(models.Contact).filter(models.Contact.user_id == user_id).count()
 
     week_ago = datetime.utcnow() - timedelta(days=7)
-    new_this_week = db.query(models.Contact).filter(models.Contact.created_at >= week_ago).count()
+    new_this_week = (
+        db.query(models.Contact)
+        .filter(models.Contact.user_id == user_id, models.Contact.created_at >= week_ago)
+        .count()
+    )
 
     active_statuses = [
         models.ContactStatus.WARM,
@@ -357,10 +448,12 @@ def get_dashboard(db: Session) -> schemas.DashboardOut:
         models.ContactStatus.MEETING_SCHEDULED,
     ]
     active_dialogues = (
-        db.query(models.Contact).filter(models.Contact.status.in_(active_statuses)).count()
+        db.query(models.Contact)
+        .filter(models.Contact.user_id == user_id, models.Contact.status.in_(active_statuses))
+        .count()
     )
 
-    needs_attention = len(contacts_needing_attention(db))
+    needs_attention = len(contacts_needing_attention(db, user_id))
 
     # Раньше здесь был отдельный db.query(...).count() на каждый статус
     # (по одному round-trip'у в БД на колонку канбана) -- при большом
@@ -370,6 +463,7 @@ def get_dashboard(db: Session) -> schemas.DashboardOut:
     # поэтому по ним честно подставляется 0, а не падаем на KeyError.
     counts_map = dict(
         db.query(models.Contact.status, func.count(models.Contact.id))
+        .filter(models.Contact.user_id == user_id)
         .group_by(models.Contact.status)
         .all()
     )
@@ -405,14 +499,20 @@ def _folder_with_count(db: Session, folder: models.Folder) -> schemas.FolderOut:
     return out
 
 
-def list_folders(db: Session) -> List[schemas.FolderOut]:
-    folders = db.query(models.Folder).order_by(models.Folder.position, models.Folder.id).all()
+def list_folders(db: Session, user_id: int) -> List[schemas.FolderOut]:
+    folders = (
+        db.query(models.Folder)
+        .filter(models.Folder.user_id == user_id)
+        .order_by(models.Folder.position, models.Folder.id)
+        .all()
+    )
     return [_folder_with_count(db, f) for f in folders]
 
 
-def create_folder(db: Session, data: schemas.FolderCreate) -> schemas.FolderOut:
-    max_position = db.query(models.Folder).count()
+def create_folder(db: Session, user_id: int, data: schemas.FolderCreate) -> schemas.FolderOut:
+    max_position = db.query(models.Folder).filter(models.Folder.user_id == user_id).count()
     folder = models.Folder(
+        user_id=user_id,
         name=data.name.strip(),
         color=data.color or "#6C8EF5",
         icon=data.icon,
@@ -424,8 +524,8 @@ def create_folder(db: Session, data: schemas.FolderCreate) -> schemas.FolderOut:
     return _folder_with_count(db, folder)
 
 
-def get_folder(db: Session, folder_id: int) -> Optional[models.Folder]:
-    return db.query(models.Folder).filter(models.Folder.id == folder_id).first()
+def get_folder(db: Session, user_id: int, folder_id: int) -> Optional[models.Folder]:
+    return db.query(models.Folder).filter(models.Folder.id == folder_id, models.Folder.user_id == user_id).first()
 
 
 def update_folder(db: Session, folder: models.Folder, data: schemas.FolderUpdate) -> schemas.FolderOut:
@@ -448,26 +548,26 @@ def delete_folder(db: Session, folder: models.Folder) -> None:
     db.commit()
 
 
-def reorder_folders(db: Session, ordered_ids: List[int]) -> List[schemas.FolderOut]:
-    folders = {f.id: f for f in db.query(models.Folder).all()}
+def reorder_folders(db: Session, user_id: int, ordered_ids: List[int]) -> List[schemas.FolderOut]:
+    folders = {f.id: f for f in db.query(models.Folder).filter(models.Folder.user_id == user_id).all()}
     for position, folder_id in enumerate(ordered_ids):
         folder = folders.get(folder_id)
         if folder is not None:
             folder.position = position
     db.commit()
-    return list_folders(db)
+    return list_folders(db, user_id)
 
 
-def assign_dialogs_to_folder(db: Session, telegram_ids: List[int], folder_id: Optional[int]) -> int:
+def assign_dialogs_to_folder(db: Session, user_id: int, telegram_ids: List[int], folder_id: Optional[int]) -> int:
     """Перекладывает один или несколько диалогов в папку (или убирает
     из папки, если folder_id is None). Если для какого-то telegram_id
     ещё нет строки Dialog (диалог не попадал в полную/живую синхронизацию),
     создаёт её -- иначе перенос в папку "потерялся" бы молча."""
     moved = 0
     for tg_id in telegram_ids:
-        dialog = get_dialog_by_telegram_id(db, tg_id)
+        dialog = get_dialog_by_telegram_id(db, user_id, tg_id)
         if dialog is None:
-            dialog = models.Dialog(telegram_id=tg_id)
+            dialog = models.Dialog(user_id=user_id, telegram_id=tg_id)
             db.add(dialog)
         dialog.folder_id = folder_id
         moved += 1
@@ -475,24 +575,24 @@ def assign_dialogs_to_folder(db: Session, telegram_ids: List[int], folder_id: Op
     return moved
 
 
-def get_dialog_by_telegram_id(db: Session, telegram_id: int) -> Optional[models.Dialog]:
-    return db.query(models.Dialog).filter(models.Dialog.telegram_id == telegram_id).first()
+def get_dialog_by_telegram_id(db: Session, user_id: int, telegram_id: int) -> Optional[models.Dialog]:
+    return db.query(models.Dialog).filter(models.Dialog.telegram_id == telegram_id, models.Dialog.user_id == user_id).first()
 
 
-def get_folder_ids_by_telegram_id(db: Session) -> dict:
-    """telegram_id -> folder_id для всех диалогов, у которых есть
-    папка. Один запрос вместо похода в БД на каждый диалог из
-    списка, который каждый раз приходит напрямую из Telegram API
+def get_folder_ids_by_telegram_id(db: Session, user_id: int) -> dict:
+    """telegram_id -> folder_id для всех диалогов ЭТОГО пользователя, у
+    которых есть папка. Один запрос вместо похода в БД на каждый диалог
+    из списка, который каждый раз приходит напрямую из Telegram API
     (см. routers/telegram.list_dialogs)."""
     rows = (
         db.query(models.Dialog.telegram_id, models.Dialog.folder_id)
-        .filter(models.Dialog.folder_id.isnot(None))
+        .filter(models.Dialog.user_id == user_id, models.Dialog.folder_id.isnot(None))
         .all()
     )
     return {tg_id: folder_id for tg_id, folder_id in rows}
 
 
-def touch_contact_last_contact(db: Session, telegram_id: int, when: datetime) -> None:
+def touch_contact_last_contact(db: Session, user_id: int, telegram_id: int, when: datetime) -> None:
     """Двигает Contact.last_contact_at вперёд при реальном событии в
     Telegram (входящее/исходящее сообщение). Обновляет только если
     новое событие свежее того, что уже сохранено — так поздние
@@ -500,7 +600,7 @@ def touch_contact_last_contact(db: Session, telegram_id: int, when: datetime) ->
     when = _naive_utc(when)
     contact = (
         db.query(models.Contact)
-        .filter(models.Contact.telegram_id == telegram_id)
+        .filter(models.Contact.telegram_id == telegram_id, models.Contact.user_id == user_id)
         .first()
     )
     if contact and (contact.last_contact_at is None or contact.last_contact_at < when):
@@ -510,6 +610,7 @@ def touch_contact_last_contact(db: Session, telegram_id: int, when: datetime) ->
 
 def upsert_dialog(
     db: Session,
+    user_id: int,
     telegram_id: int,
     *,
     last_message_id: Optional[int] = None,
@@ -520,20 +621,20 @@ def upsert_dialog(
     unread_count: Optional[int] = None,
     pinned: Optional[bool] = None,
 ) -> models.Dialog:
-    """Upsert по telegram_id. Поля, не переданные явно (None), не
+    """Upsert по (user_id, telegram_id). Поля, не переданные явно (None), не
     трогают уже сохранённое значение — так частичные обновления
     (например, только unread_count из события прочтения) не затирают
     последний текст сообщения нулями."""
-    dialog = get_dialog_by_telegram_id(db, telegram_id)
+    dialog = get_dialog_by_telegram_id(db, user_id, telegram_id)
     if dialog is None:
-        dialog = models.Dialog(telegram_id=telegram_id)
+        dialog = models.Dialog(user_id=user_id, telegram_id=telegram_id)
         db.add(dialog)
 
     last_message_date = _naive_utc(last_message_date)
 
     contact = (
         db.query(models.Contact)
-        .filter(models.Contact.telegram_id == telegram_id)
+        .filter(models.Contact.telegram_id == telegram_id, models.Contact.user_id == user_id)
         .first()
     )
     if contact is not None:
@@ -568,6 +669,7 @@ def upsert_dialog(
 
 def upsert_message(
     db: Session,
+    user_id: int,
     dialog_telegram_id: int,
     message_id: int,
     *,
@@ -579,20 +681,22 @@ def upsert_message(
     status: Optional[str] = None,
     edited: bool = False,
 ) -> models.Message:
-    """Upsert по (dialog_telegram_id, message_id) — источник дедупликации
-    (Баг №2: "возможны дубли"). Повторное событие с тем же id (например,
-    Telethon иногда присылает апдейт дважды при нестабильной сети)
-    обновляет существующую строку вместо создания второй."""
+    """Upsert по (user_id, dialog_telegram_id, message_id) — источник
+    дедупликации (Баг №2: "возможны дубли"). Повторное событие с тем же
+    id (например, Telethon иногда присылает апдейт дважды при
+    нестабильной сети) обновляет существующую строку вместо создания
+    второй."""
     msg = (
         db.query(models.Message)
         .filter(
+            models.Message.user_id == user_id,
             models.Message.dialog_telegram_id == dialog_telegram_id,
             models.Message.message_id == message_id,
         )
         .first()
     )
     if msg is None:
-        msg = models.Message(dialog_telegram_id=dialog_telegram_id, message_id=message_id)
+        msg = models.Message(user_id=user_id, dialog_telegram_id=dialog_telegram_id, message_id=message_id)
         db.add(msg)
 
     msg.text = text
@@ -610,10 +714,11 @@ def upsert_message(
     return msg
 
 
-def mark_message_deleted(db: Session, dialog_telegram_id: int, message_id: int) -> None:
+def mark_message_deleted(db: Session, user_id: int, dialog_telegram_id: int, message_id: int) -> None:
     msg = (
         db.query(models.Message)
         .filter(
+            models.Message.user_id == user_id,
             models.Message.dialog_telegram_id == dialog_telegram_id,
             models.Message.message_id == message_id,
         )
@@ -624,7 +729,7 @@ def mark_message_deleted(db: Session, dialog_telegram_id: int, message_id: int) 
         db.commit()
 
 
-def mark_outbox_read(db: Session, dialog_telegram_id: int, max_id: int) -> None:
+def mark_outbox_read(db: Session, user_id: int, dialog_telegram_id: int, max_id: int) -> None:
     """Событие Telethon events.MessageRead для исходящих: собеседник
     прочитал все наши сообщения с id <= max_id. Раньше статус
     ✓/✓✓ пересчитывался только при следующем открытии диалога
@@ -632,6 +737,7 @@ def mark_outbox_read(db: Session, dialog_telegram_id: int, max_id: int) -> None:
     (
         db.query(models.Message)
         .filter(
+            models.Message.user_id == user_id,
             models.Message.dialog_telegram_id == dialog_telegram_id,
             models.Message.out.is_(True),
             models.Message.message_id <= max_id,
@@ -661,14 +767,20 @@ def _media_folder_with_count(db: Session, folder: models.MediaFolder) -> schemas
     return out
 
 
-def list_media_folders(db: Session) -> List[schemas.MediaFolderOut]:
-    folders = db.query(models.MediaFolder).order_by(models.MediaFolder.position, models.MediaFolder.id).all()
+def list_media_folders(db: Session, user_id: int) -> List[schemas.MediaFolderOut]:
+    folders = (
+        db.query(models.MediaFolder)
+        .filter(models.MediaFolder.user_id == user_id)
+        .order_by(models.MediaFolder.position, models.MediaFolder.id)
+        .all()
+    )
     return [_media_folder_with_count(db, f) for f in folders]
 
 
-def create_media_folder(db: Session, data: schemas.MediaFolderCreate) -> schemas.MediaFolderOut:
-    max_position = db.query(models.MediaFolder).count()
+def create_media_folder(db: Session, user_id: int, data: schemas.MediaFolderCreate) -> schemas.MediaFolderOut:
+    max_position = db.query(models.MediaFolder).filter(models.MediaFolder.user_id == user_id).count()
     folder = models.MediaFolder(
+        user_id=user_id,
         name=data.name.strip(),
         color=data.color or "#6C8EF5",
         icon=data.icon,
@@ -680,8 +792,8 @@ def create_media_folder(db: Session, data: schemas.MediaFolderCreate) -> schemas
     return _media_folder_with_count(db, folder)
 
 
-def get_media_folder(db: Session, folder_id: int) -> Optional[models.MediaFolder]:
-    return db.query(models.MediaFolder).filter(models.MediaFolder.id == folder_id).first()
+def get_media_folder(db: Session, user_id: int, folder_id: int) -> Optional[models.MediaFolder]:
+    return db.query(models.MediaFolder).filter(models.MediaFolder.id == folder_id, models.MediaFolder.user_id == user_id).first()
 
 
 def update_media_folder(db: Session, folder: models.MediaFolder, data: schemas.MediaFolderUpdate) -> schemas.MediaFolderOut:
@@ -704,31 +816,31 @@ def delete_media_folder(db: Session, folder: models.MediaFolder) -> None:
     db.commit()
 
 
-def reorder_media_folders(db: Session, ordered_ids: List[int]) -> List[schemas.MediaFolderOut]:
-    folders = {f.id: f for f in db.query(models.MediaFolder).all()}
+def reorder_media_folders(db: Session, user_id: int, ordered_ids: List[int]) -> List[schemas.MediaFolderOut]:
+    folders = {f.id: f for f in db.query(models.MediaFolder).filter(models.MediaFolder.user_id == user_id).all()}
     for position, folder_id in enumerate(ordered_ids):
         folder = folders.get(folder_id)
         if folder is not None:
             folder.position = position
     db.commit()
-    return list_media_folders(db)
+    return list_media_folders(db, user_id)
 
 
-def move_media_files(db: Session, media_ids: List[int], folder_id: Optional[int]) -> int:
+def move_media_files(db: Session, user_id: int, media_ids: List[int], folder_id: Optional[int]) -> int:
     """Массовый перенос файлов в папку (или изъятие, если folder_id
     is None) — используется и множественным выбором в галерее, и
     drag & drop одного файла на папку в боковой панели."""
     moved = (
         db.query(models.MediaFile)
-        .filter(models.MediaFile.id.in_(media_ids))
+        .filter(models.MediaFile.id.in_(media_ids), models.MediaFile.user_id == user_id)
         .update({"folder_id": folder_id}, synchronize_session=False)
     )
     db.commit()
     return moved
 
 
-def bulk_delete_media_files(db: Session, media_ids: List[int]) -> int:
-    rows = db.query(models.MediaFile).filter(models.MediaFile.id.in_(media_ids)).all()
+def bulk_delete_media_files(db: Session, user_id: int, media_ids: List[int]) -> int:
+    rows = db.query(models.MediaFile).filter(models.MediaFile.id.in_(media_ids), models.MediaFile.user_id == user_id).all()
     count = 0
     for media in rows:
         delete_media_file(db, media)
@@ -743,9 +855,9 @@ def media_file_out(m: models.MediaFile) -> schemas.MediaFileOut:
     return out
 
 
-def create_media_file(db: Session, contents: bytes, filename: str, mime: Optional[str] = None) -> schemas.MediaFileOut:
+def create_media_file(db: Session, user_id: int, contents: bytes, filename: str, mime: Optional[str] = None) -> schemas.MediaFileOut:
     fields = media_manager.store_upload(contents, filename, mime)
-    row = models.MediaFile(**fields)
+    row = models.MediaFile(user_id=user_id, **fields)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -764,10 +876,11 @@ _MEDIA_SORTS = {
 
 
 def list_media_files(
-    db: Session, search: Optional[str] = None, kind: Optional[str] = None, sort: str = "date_desc",
+    db: Session, user_id: int, search: Optional[str] = None, kind: Optional[str] = None, sort: str = "date_desc",
     folder_id: Optional[int] = None, unfiled: bool = False,
 ) -> schemas.MediaListOut:
-    query = db.query(models.MediaFile)
+    base = db.query(models.MediaFile).filter(models.MediaFile.user_id == user_id)
+    query = base
     if search:
         query = query.filter(models.MediaFile.original_name.ilike(f"%{search}%"))
     if kind:
@@ -780,11 +893,12 @@ def list_media_files(
     rows = query.all()
 
     # Общий объём хранилища и число файлов считаем по ВСЕЙ медиатеке
-    # (без учёта поиска/фильтра) — это раздел ИНТЕРФЕЙС ТЗ, "отображение
-    # количества файлов" и "общего объёма хранилища" описывают состояние
-    # галереи целиком, а не текущей выборки.
-    total_count = db.query(models.MediaFile).count()
-    total_size = db.query(func.coalesce(func.sum(models.MediaFile.size_bytes), 0)).scalar() or 0
+    # ЭТОГО пользователя (без учёта поиска/фильтра) — это раздел
+    # ИНТЕРФЕЙС ТЗ, "отображение количества файлов" и "общего объёма
+    # хранилища" описывают состояние галереи целиком, а не текущей
+    # выборки.
+    total_count = base.count()
+    total_size = db.query(func.coalesce(func.sum(models.MediaFile.size_bytes), 0)).filter(models.MediaFile.user_id == user_id).scalar() or 0
 
     # Раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ ТЗ: "Использовано: 5 раз" /
     # "Последняя отправка: 15.07.2026" в галерее. send_count уже лежит
@@ -815,8 +929,8 @@ def list_media_files(
     )
 
 
-def get_media_file(db: Session, media_id: int) -> Optional[models.MediaFile]:
-    return db.query(models.MediaFile).filter(models.MediaFile.id == media_id).first()
+def get_media_file(db: Session, user_id: int, media_id: int) -> Optional[models.MediaFile]:
+    return db.query(models.MediaFile).filter(models.MediaFile.id == media_id, models.MediaFile.user_id == user_id).first()
 
 
 def rename_media_file(db: Session, media: models.MediaFile, new_name: str) -> schemas.MediaFileOut:
@@ -839,13 +953,13 @@ def delete_media_file(db: Session, media: models.MediaFile) -> None:
 
 
 def record_media_usage(
-    db: Session, media_id: int, telegram_id: int, context: str = "chat",
+    db: Session, user_id: int, media_id: int, telegram_id: int, context: str = "chat",
     telegram_message_id: Optional[int] = None,
     telegram_file_id: Optional[str] = None,
     sent_kind: Optional[str] = None,
 ) -> None:
     usage = models.MediaUsage(
-        media_id=media_id, telegram_id=telegram_id, context=context,
+        user_id=user_id, media_id=media_id, telegram_id=telegram_id, context=context,
         telegram_message_id=telegram_message_id,
         telegram_file_id=telegram_file_id,
         sent_kind=sent_kind,
@@ -857,24 +971,25 @@ def record_media_usage(
     db.commit()
 
 
-def get_latest_media_file_id(db: Session, media_id: int) -> Optional[str]:
+def get_latest_media_file_id(db: Session, user_id: int, media_id: int) -> Optional[str]:
     """Последний известный telegram_file_id для этого файла медиатеки
-    (по любому диалогу, не только текущему) — используется
-    telegram_service.send_file, чтобы переслать тот же файл повторно
-    без выгрузки байтов заново (раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ ТЗ)."""
+    (по любому диалогу ЭТОГО пользователя, не только текущему) —
+    используется telegram_service.send_file, чтобы переслать тот же
+    файл повторно без выгрузки байтов заново (раздел ИСТОРИЯ
+    ИСПОЛЬЗОВАНИЯ ТЗ)."""
     row = (
         db.query(models.MediaUsage.telegram_file_id)
-        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.telegram_file_id.isnot(None))
+        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.user_id == user_id, models.MediaUsage.telegram_file_id.isnot(None))
         .order_by(models.MediaUsage.sent_at.desc())
         .first()
     )
     return row[0] if row else None
 
 
-def media_usage_status(db: Session, media_id: int, telegram_id: int) -> schemas.MediaUsageStatusOut:
+def media_usage_status(db: Session, user_id: int, media_id: int, telegram_id: int) -> schemas.MediaUsageStatusOut:
     usages = (
         db.query(models.MediaUsage)
-        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.telegram_id == telegram_id)
+        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.user_id == user_id, models.MediaUsage.telegram_id == telegram_id)
         .order_by(models.MediaUsage.sent_at.desc())
         .all()
     )
@@ -886,14 +1001,14 @@ def media_usage_status(db: Session, media_id: int, telegram_id: int) -> schemas.
     )
 
 
-def media_usage_bulk_check(db: Session, media_id: int, telegram_ids: List[int]) -> List[schemas.MediaUsageStatusOut]:
+def media_usage_bulk_check(db: Session, user_id: int, media_id: int, telegram_ids: List[int]) -> List[schemas.MediaUsageStatusOut]:
     """Раздел ПРОВЕРКА ПРИ КАМПАНИЯХ: для каждого получателя из списка —
     отправлялся ли уже этот файл и когда в последний раз. Один запрос
     на всех получателей вместо N, чтобы предпросмотр кампании с
     сотнями получателей не тормозил."""
     rows = (
         db.query(models.MediaUsage)
-        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.telegram_id.in_(telegram_ids))
+        .filter(models.MediaUsage.media_id == media_id, models.MediaUsage.user_id == user_id, models.MediaUsage.telegram_id.in_(telegram_ids))
         .order_by(models.MediaUsage.sent_at.desc())
         .all()
     )
@@ -913,14 +1028,14 @@ def media_usage_bulk_check(db: Session, media_id: int, telegram_ids: List[int]) 
     return out
 
 
-def dialog_media_usage(db: Session, telegram_id: int, media_ids: List[int]) -> List[schemas.MediaDialogUsageOut]:
+def dialog_media_usage(db: Session, user_id: int, telegram_id: int, media_ids: List[int]) -> List[schemas.MediaDialogUsageOut]:
     """Обратная сторона media_usage_bulk_check: один диалог, много
     файлов — используется галереей внутри чата (раздел ПРОВЕРКА В
     ЧАТЕ ТЗ), чтобы одним запросом отметить "Уже отправлялось" сразу
     на всех миниатюрах текущей страницы галереи."""
     rows = (
         db.query(models.MediaUsage)
-        .filter(models.MediaUsage.telegram_id == telegram_id, models.MediaUsage.media_id.in_(media_ids))
+        .filter(models.MediaUsage.telegram_id == telegram_id, models.MediaUsage.user_id == user_id, models.MediaUsage.media_id.in_(media_ids))
         .order_by(models.MediaUsage.sent_at.desc())
         .all()
     )
@@ -954,13 +1069,14 @@ def campaign_out(campaign: models.Campaign) -> schemas.CampaignOut:
     return out
 
 
-def create_campaign(db: Session, data: schemas.CampaignCreateIn) -> schemas.CampaignOut:
+def create_campaign(db: Session, user_id: int, data: schemas.CampaignCreateIn) -> schemas.CampaignOut:
     status = (
         models.CampaignStatus.READY
         if data.message_text.strip() and data.folder_ids
         else models.CampaignStatus.DRAFT
     )
     campaign = models.Campaign(
+        user_id=user_id,
         name=data.name.strip(),
         message_text=data.message_text,
         folder_ids_json=json.dumps(data.folder_ids),
@@ -973,13 +1089,18 @@ def create_campaign(db: Session, data: schemas.CampaignCreateIn) -> schemas.Camp
     return campaign_out(campaign)
 
 
-def list_campaigns(db: Session) -> List[schemas.CampaignOut]:
-    campaigns = db.query(models.Campaign).order_by(models.Campaign.created_at.desc()).all()
+def list_campaigns(db: Session, user_id: int) -> List[schemas.CampaignOut]:
+    campaigns = (
+        db.query(models.Campaign)
+        .filter(models.Campaign.user_id == user_id)
+        .order_by(models.Campaign.created_at.desc())
+        .all()
+    )
     return [campaign_out(c) for c in campaigns]
 
 
-def get_campaign(db: Session, campaign_id: int) -> Optional[models.Campaign]:
-    return db.query(models.Campaign).filter(models.Campaign.id == campaign_id).first()
+def get_campaign(db: Session, user_id: int, campaign_id: int) -> Optional[models.Campaign]:
+    return db.query(models.Campaign).filter(models.Campaign.id == campaign_id, models.Campaign.user_id == user_id).first()
 
 
 def update_campaign(db: Session, campaign: models.Campaign, data: schemas.CampaignUpdateIn) -> schemas.CampaignOut:
@@ -1034,12 +1155,13 @@ def set_campaign_status(db: Session, campaign: models.Campaign, status: "models.
 
 
 def resolve_campaign_recipients(
-    db: Session, folder_ids: List[int], filters: schemas.CampaignFiltersIn,
+    db: Session, user_id: int, folder_ids: List[int], filters: schemas.CampaignFiltersIn,
 ) -> tuple[List[int], int, dict]:
     """Применяет фильтры получателей (раздел ФИЛЬТРЫ ПОЛУЧАТЕЛЕЙ ТЗ) к
-    диалогам из выбранных папок. Возвращает (итоговый список telegram_id,
-    количество диалогов в сегментах до фильтрации, разбивку исключённых
-    по причине) -- второе и третье нужны для предпросмотра.
+    диалогам ЭТОГО пользователя из выбранных папок. Возвращает (итоговый
+    список telegram_id, количество диалогов в сегментах до фильтрации,
+    разбивку исключённых по причине) -- второе и третье нужны для
+    предпросмотра.
 
     Честно про два фильтра, которые локальная модель данных CRM не
     поддерживает напрямую:
@@ -1050,7 +1172,7 @@ def resolve_campaign_recipients(
       сообщение" (last_message_date IS NOT NULL), а не как признак
       "диалог не заброшен" в каком-то ином, более точном смысле.
     """
-    query = db.query(models.Dialog)
+    query = db.query(models.Dialog).filter(models.Dialog.user_id == user_id)
     if folder_ids:
         query = query.filter(models.Dialog.folder_id.in_(folder_ids))
     dialogs = query.options(joinedload(models.Dialog.contact)).all()
@@ -1090,19 +1212,19 @@ def resolve_campaign_recipients(
 
 
 def create_campaign_log(
-    db: Session, campaign_id: int, telegram_id: int, result: str, error_text: Optional[str] = None,
+    db: Session, user_id: int, campaign_id: int, telegram_id: int, result: str, error_text: Optional[str] = None,
 ) -> None:
     log = models.CampaignLog(
-        campaign_id=campaign_id, telegram_id=telegram_id, result=result, error_text=error_text,
+        user_id=user_id, campaign_id=campaign_id, telegram_id=telegram_id, result=result, error_text=error_text,
     )
     db.add(log)
     db.commit()
 
 
-def list_campaign_logs(db: Session, campaign_id: int, limit: int = 200) -> List[models.CampaignLog]:
+def list_campaign_logs(db: Session, user_id: int, campaign_id: int, limit: int = 200) -> List[models.CampaignLog]:
     return (
         db.query(models.CampaignLog)
-        .filter(models.CampaignLog.campaign_id == campaign_id)
+        .filter(models.CampaignLog.campaign_id == campaign_id, models.CampaignLog.user_id == user_id)
         .order_by(models.CampaignLog.processed_at.desc())
         .limit(limit)
         .all()
@@ -1112,10 +1234,13 @@ def list_campaign_logs(db: Session, campaign_id: int, limit: int = 200) -> List[
 def list_stuck_running_campaigns(db: Session) -> List[models.Campaign]:
     """Кампании, которые остались в статусе RUNNING на диске -- то есть
     процесс упал/перезапустился посреди рассылки (см. СИНХРОНИЗАЦИЯ ТЗ,
-    \"восстанавливать незавершённые кампании\"). Не резюмируются
+    "восстанавливать незавершённые кампании"). Не резюмируются
     автоматически (чтобы не отправить сообщения повторно/непредсказуемо
     без ведома пользователя) -- переводятся в PAUSED, откуда их можно
-    осознанно продолжить."""
+    осознанно продолжить.
+
+    Намеренно БЕЗ user_id: это фоновая проверка при старте приложения
+    по всем пользователям сразу, а не ответ на запрос одного из них."""
     return db.query(models.Campaign).filter(models.Campaign.status == models.CampaignStatus.RUNNING).all()
 
 
@@ -1123,9 +1248,10 @@ def list_stuck_running_campaigns(db: Session) -> List[models.Campaign]:
 # Personal AI Operating System (см. ai_personal_engine.py)
 # ---------------------------------------------------------------
 
-def create_memory_item(db: Session, item: dict, source: str, contact_id: Optional[int] = None,
+def create_memory_item(db: Session, user_id: int, item: dict, source: str, contact_id: Optional[int] = None,
                         source_text: Optional[str] = None) -> "models.AIMemoryItem":
     row = models.AIMemoryItem(
+        user_id=user_id,
         kind=item["kind"],
         title=item["title"],
         details=item.get("details"),
@@ -1141,10 +1267,10 @@ def create_memory_item(db: Session, item: dict, source: str, contact_id: Optiona
     return row
 
 
-def list_memory_items(db: Session, contact_id: Optional[int] = None,
+def list_memory_items(db: Session, user_id: int, contact_id: Optional[int] = None,
                        kind: Optional[str] = None, only_open: bool = False,
                        limit: int = 200) -> List["models.AIMemoryItem"]:
-    q = db.query(models.AIMemoryItem)
+    q = db.query(models.AIMemoryItem).filter(models.AIMemoryItem.user_id == user_id)
     if contact_id is not None:
         q = q.filter(models.AIMemoryItem.contact_id == contact_id)
     if kind is not None:
@@ -1154,8 +1280,8 @@ def list_memory_items(db: Session, contact_id: Optional[int] = None,
     return q.order_by(models.AIMemoryItem.created_at.desc()).limit(limit).all()
 
 
-def get_memory_item(db: Session, item_id: int) -> Optional["models.AIMemoryItem"]:
-    return db.query(models.AIMemoryItem).filter(models.AIMemoryItem.id == item_id).first()
+def get_memory_item(db: Session, user_id: int, item_id: int) -> Optional["models.AIMemoryItem"]:
+    return db.query(models.AIMemoryItem).filter(models.AIMemoryItem.id == item_id, models.AIMemoryItem.user_id == user_id).first()
 
 
 def update_memory_item(db: Session, row: "models.AIMemoryItem", data: "schemas.AIMemoryItemUpdate") -> None:
@@ -1170,13 +1296,15 @@ def delete_memory_item(db: Session, row: "models.AIMemoryItem") -> None:
     db.commit()
 
 
-def save_patterns(db: Session, patterns: List[dict]) -> List["models.AIPattern"]:
-    """Заменяет прошлый набор закономерностей новым — старые записи не
-    накапливаются бесконечно, актуален всегда последний пересчёт."""
-    db.query(models.AIPattern).delete()
+def save_patterns(db: Session, user_id: int, patterns: List[dict]) -> List["models.AIPattern"]:
+    """Заменяет прошлый набор закономерностей ЭТОГО пользователя новым —
+    старые записи не накапливаются бесконечно, актуален всегда последний
+    пересчёт."""
+    db.query(models.AIPattern).filter(models.AIPattern.user_id == user_id).delete()
     rows = []
     for p in patterns:
         row = models.AIPattern(
+            user_id=user_id,
             title=p["title"],
             description=p.get("description"),
             confidence=p.get("confidence", 0.5),
@@ -1190,12 +1318,13 @@ def save_patterns(db: Session, patterns: List[dict]) -> List["models.AIPattern"]
     return rows
 
 
-def list_patterns(db: Session) -> List["models.AIPattern"]:
-    return db.query(models.AIPattern).order_by(models.AIPattern.confidence.desc()).all()
+def list_patterns(db: Session, user_id: int) -> List["models.AIPattern"]:
+    return db.query(models.AIPattern).filter(models.AIPattern.user_id == user_id).order_by(models.AIPattern.confidence.desc()).all()
 
 
-def create_decision(db: Session, situation: str, options: List[dict]) -> "models.AIDecision":
+def create_decision(db: Session, user_id: int, situation: str, options: List[dict]) -> "models.AIDecision":
     row = models.AIDecision(
+        user_id=user_id,
         situation=situation,
         options_json=json.dumps(options, ensure_ascii=False),
     )
@@ -1205,12 +1334,18 @@ def create_decision(db: Session, situation: str, options: List[dict]) -> "models
     return row
 
 
-def list_decisions(db: Session, limit: int = 50) -> List["models.AIDecision"]:
-    return db.query(models.AIDecision).order_by(models.AIDecision.created_at.desc()).limit(limit).all()
+def list_decisions(db: Session, user_id: int, limit: int = 50) -> List["models.AIDecision"]:
+    return (
+        db.query(models.AIDecision)
+        .filter(models.AIDecision.user_id == user_id)
+        .order_by(models.AIDecision.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
-def get_decision(db: Session, decision_id: int) -> Optional["models.AIDecision"]:
-    return db.query(models.AIDecision).filter(models.AIDecision.id == decision_id).first()
+def get_decision(db: Session, user_id: int, decision_id: int) -> Optional["models.AIDecision"]:
+    return db.query(models.AIDecision).filter(models.AIDecision.id == decision_id, models.AIDecision.user_id == user_id).first()
 
 
 def choose_decision_option(db: Session, row: "models.AIDecision", chosen_option: str) -> None:
@@ -1228,11 +1363,12 @@ def delete_decision(db: Session, row: "models.AIDecision") -> None:
 # AI Overview (см. backend/ai_overview.py)
 # ---------------------------------------------------------------
 
-def save_ai_overview(db: Session, contact_id: int, result: dict) -> "models.AIOverviewSnapshot":
+def save_ai_overview(db: Session, user_id: int, contact_id: int, result: dict) -> "models.AIOverviewSnapshot":
     """Сохраняет новый снимок AI Overview. Старые снимки НЕ удаляются
     (в отличие от save_patterns) — нужна история для сравнения "было ->
     стало" в следующем анализе, см. ai_overview._gather_context."""
     row = models.AIOverviewSnapshot(
+        user_id=user_id,
         contact_id=contact_id,
         current_state=result["current_state"],
         key_factors_json=json.dumps(result.get("key_factors", []), ensure_ascii=False),
@@ -1250,18 +1386,18 @@ def save_ai_overview(db: Session, contact_id: int, result: dict) -> "models.AIOv
     return row
 
 
-def list_ai_overview_snapshots(db: Session, contact_id: int, limit: int = 2) -> List["models.AIOverviewSnapshot"]:
+def list_ai_overview_snapshots(db: Session, user_id: int, contact_id: int, limit: int = 2) -> List["models.AIOverviewSnapshot"]:
     """Возвращает последние снимки, от новых к старым (используется как
     для показа истории, так и как контекст для следующего анализа)."""
     return (
         db.query(models.AIOverviewSnapshot)
-        .filter(models.AIOverviewSnapshot.contact_id == contact_id)
+        .filter(models.AIOverviewSnapshot.contact_id == contact_id, models.AIOverviewSnapshot.user_id == user_id)
         .order_by(models.AIOverviewSnapshot.created_at.desc())
         .limit(limit)
         .all()
     )
 
 
-def get_latest_ai_overview(db: Session, contact_id: int) -> Optional["models.AIOverviewSnapshot"]:
-    rows = list_ai_overview_snapshots(db, contact_id, limit=1)
+def get_latest_ai_overview(db: Session, user_id: int, contact_id: int) -> Optional["models.AIOverviewSnapshot"]:
+    rows = list_ai_overview_snapshots(db, user_id, contact_id, limit=1)
     return rows[0] if rows else None

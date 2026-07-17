@@ -10,7 +10,13 @@ telegram_id (Campaign.recipient_ids_json, зафиксирован в момен
 это просто флаг в БД (Campaign.status == PAUSED), который цикл
 проверяет перед каждой отправкой; никакого отдельного планировщика
 или очереди задач нет, это соответствует масштабу остального проекта
-(один аккаунт, работа в одном процессе).
+(один аккаунт на пользователя, работа в одном процессе).
+
+Каждая кампания принадлежит конкретному пользователю CRM (см.
+models.Campaign.user_id) и рассылается через ЕГО собственный
+Telegram-клиент (get_telegram_service(user_id)), а не общий на всё
+приложение — поэтому run_campaign теперь принимает user_id и
+прокидывает его во все обращения к crud/telegram_service.
 """
 import asyncio
 import logging
@@ -21,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from . import crud, models, media_manager
 from .database import SessionLocal
-from .telegram_service import telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
+from .telegram_service import get_telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
 
 logger = logging.getLogger("telegram-crm")
 
@@ -45,10 +51,11 @@ def render_template(text: str, variables: dict) -> str:
     return string.Formatter().vformat(text, (), _SafeDict(**variables))
 
 
-async def run_campaign(campaign_id: int) -> None:
+async def run_campaign(user_id: int, campaign_id: int) -> None:
     db: Session = SessionLocal()
+    telegram_service = get_telegram_service(user_id)
     try:
-        campaign = crud.get_campaign(db, campaign_id)
+        campaign = crud.get_campaign(db, user_id, campaign_id)
         if campaign is None:
             return
         recipient_ids = campaign.recipient_ids
@@ -70,13 +77,13 @@ async def run_campaign(campaign_id: int) -> None:
                 text = render_template(campaign.message_text, variables)
                 if campaign.media_id and campaign.media:
                     path = media_manager.file_path(campaign.media.stored_name)
-                    cached_file_id = crud.get_latest_media_file_id(db, campaign.media_id)
+                    cached_file_id = crud.get_latest_media_file_id(db, user_id, campaign.media_id)
                     send_result = await telegram_service.send_file(
                         telegram_id, str(path), caption=text, kind=campaign.media.kind.value,
                         cached_file_id=cached_file_id,
                     )
                     crud.record_media_usage(
-                        db, campaign.media_id, telegram_id, context="campaign",
+                        db, user_id, campaign.media_id, telegram_id, context="campaign",
                         telegram_message_id=send_result.get("id"),
                         telegram_file_id=send_result.get("cache_file_id"),
                         sent_kind=campaign.media.kind.value,
@@ -100,7 +107,7 @@ async def run_campaign(campaign_id: int) -> None:
             campaign.processed_count += 1
             campaign.cursor += 1
             db.commit()
-            crud.create_campaign_log(db, campaign_id, telegram_id, result, error_text)
+            crud.create_campaign_log(db, user_id, campaign_id, telegram_id, result, error_text)
 
             if campaign.cursor < total:
                 await asyncio.sleep(BULK_SEND_DELAY_SECONDS)

@@ -7,13 +7,14 @@ from sqlalchemy.orm import Session
 
 from .. import crud, schemas, models, analysis as ai, ai_gemini, ai_overview, config
 from ..database import get_db
-from ..telegram_service import telegram_service, TelegramAuthError
+from ..auth import get_current_user
+from ..telegram_service import get_telegram_service, TelegramAuthError
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
 
 
-def _get_or_404(db: Session, contact_id: int) -> models.Contact:
-    contact = crud.get_contact(db, contact_id)
+def _get_or_404(db: Session, user_id: int, contact_id: int) -> models.Contact:
+    contact = crud.get_contact(db, user_id, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Контакт не найден")
     return contact
@@ -28,58 +29,95 @@ def list_contacts(
     max_interest: Optional[int] = Query(None, ge=1, le=10),
     sort: str = "-updated_at",
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
-    return crud.list_contacts(db, search, status, tag, min_interest, max_interest, sort)
+    return crud.list_contacts(db, current_user.id, search, status, tag, min_interest, max_interest, sort)
 
 
 @router.post("", response_model=schemas.ContactDetailOut, status_code=201)
-def create_contact(data: schemas.ContactCreate, db: Session = Depends(get_db)):
-    contact = crud.create_contact(db, data)
-    return crud.get_contact(db, contact.id)
+def create_contact(
+    data: schemas.ContactCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = crud.create_contact(db, current_user.id, data)
+    return crud.get_contact(db, current_user.id, contact.id)
 
 
 @router.get("/by-telegram/{telegram_id}", response_model=schemas.ContactDetailOut)
-def get_contact_by_telegram(telegram_id: int, db: Session = Depends(get_db)):
-    contact = crud.get_contact_by_telegram_id(db, telegram_id)
+def get_contact_by_telegram(
+    telegram_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = crud.get_contact_by_telegram_id(db, current_user.id, telegram_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Контакт не найден в CRM")
     return contact
 
 
 @router.get("/{contact_id}", response_model=schemas.ContactDetailOut)
-def get_contact(contact_id: int, db: Session = Depends(get_db)):
-    return _get_or_404(db, contact_id)
+def get_contact(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return _get_or_404(db, current_user.id, contact_id)
 
 
 @router.patch("/{contact_id}", response_model=schemas.ContactDetailOut)
-def update_contact(contact_id: int, data: schemas.ContactUpdate, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
-    crud.update_contact(db, contact, data)
-    return crud.get_contact(db, contact_id)
+def update_contact(
+    contact_id: int,
+    data: schemas.ContactUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
+    crud.update_contact(db, current_user.id, contact, data)
+    return crud.get_contact(db, current_user.id, contact_id)
 
 
 @router.patch("/{contact_id}/status", response_model=schemas.ContactDetailOut)
-def update_status(contact_id: int, data: schemas.ContactStatusUpdate, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
-    crud.update_status(db, contact, data.status)
-    return crud.get_contact(db, contact_id)
+def update_status(
+    contact_id: int,
+    data: schemas.ContactStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
+    crud.update_status(db, current_user.id, contact, data.status)
+    return crud.get_contact(db, current_user.id, contact_id)
 
 
 @router.delete("/{contact_id}", status_code=204)
-def delete_contact(contact_id: int, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
+def delete_contact(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
     crud.delete_contact(db, contact)
 
 
 @router.post("/{contact_id}/interactions", response_model=schemas.InteractionOut, status_code=201)
-def add_interaction(contact_id: int, data: schemas.InteractionCreate, db: Session = Depends(get_db)):
-    _get_or_404(db, contact_id)
-    return crud.add_interaction(db, contact_id, data)
+def add_interaction(
+    contact_id: int,
+    data: schemas.InteractionCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    _get_or_404(db, current_user.id, contact_id)
+    return crud.add_interaction(db, current_user.id, contact_id, data)
 
 
 @router.delete("/{contact_id}/interactions/{interaction_id}", status_code=204)
-def delete_interaction(contact_id: int, interaction_id: int, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
+def delete_interaction(
+    contact_id: int,
+    interaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
     interaction = next((i for i in contact.interactions if i.id == interaction_id), None)
     if not interaction:
         raise HTTPException(status_code=404, detail="Запись не найдена")
@@ -88,7 +126,7 @@ def delete_interaction(contact_id: int, interaction_id: int, db: Session = Depen
 
 # ---------- Contact Intelligence (Этап 9) ----------
 
-# Простой in-memory троттлинг "живой" оценки: contact_id -> (monotonic-время, последний результат).
+# Простой in-memory троттлинг "живой" оценки: (user_id, contact_id) -> (monotonic-время, последний результат).
 # Переживает только время жизни процесса — это ровно то, что нужно (не история,
 # а просто "не пересчитывать чаще, чем LIVE_SCORE_MIN_INTERVAL, пока открыт диалог").
 _live_score_cache: dict = {}
@@ -116,13 +154,17 @@ def _analysis_out(contact: models.Contact, result: dict) -> schemas.AnalysisOut:
 
 
 @router.post("/{contact_id}/analyze", response_model=schemas.AnalysisOut)
-async def analyze_contact(contact_id: int, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
+async def analyze_contact(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
 
     raw_messages: list = []
     if contact.telegram_id:
         try:
-            raw_messages = await telegram_service.get_messages(contact.telegram_id, limit=300)
+            raw_messages = await get_telegram_service(current_user.id).get_messages(contact.telegram_id, limit=300)
         except TelegramAuthError:
             # Telegram не подключён/не авторизован — анализируем по тому,
             # что уже есть в CRM, не роняя запрос ошибкой.
@@ -146,7 +188,7 @@ async def analyze_contact(contact_id: int, db: Session = Depends(get_db)):
     # Оставляем след в таймлайне, чтобы было видно, когда и с каким
     # выводом запускался анализ.
     crud.add_interaction(
-        db, contact.id,
+        db, current_user.id, contact.id,
         schemas.InteractionCreate(
             note=f"AI-анализ: {result['interest_category']} ({result['interest_score']}/100). {result['ai_summary']}",
             event_type="ai_analysis",
@@ -157,7 +199,12 @@ async def analyze_contact(contact_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{contact_id}/live-score", response_model=schemas.LiveScoreOut)
-def live_score(contact_id: int, data: schemas.LiveScoreIn, db: Session = Depends(get_db)):
+def live_score(
+    contact_id: int,
+    data: schemas.LiveScoreIn,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """Быстрая "живая" оценка интереса прямо во время просмотра переписки.
 
     В отличие от /analyze: считает ТОЛЬКО по сообщениям, которые фронтенд
@@ -167,10 +214,11 @@ def live_score(contact_id: int, data: schemas.LiveScoreIn, db: Session = Depends
     сообщений). Ничего не пишет в БД и не трогает историю таймлайна — это
     просто индикатор, а не полноценный анализ.
     """
-    contact = _get_or_404(db, contact_id)
+    contact = _get_or_404(db, current_user.id, contact_id)
 
+    cache_key = (current_user.id, contact_id)
     now = time.monotonic()
-    cached = _live_score_cache.get(contact_id)
+    cached = _live_score_cache.get(cache_key)
     if cached and now - cached[0] < config.LIVE_SCORE_MIN_INTERVAL:
         return cached[1]
 
@@ -188,7 +236,7 @@ def live_score(contact_id: int, data: schemas.LiveScoreIn, db: Session = Depends
         messages_analyzed=result.get("messages_analyzed", 0),
         trend=result.get("trend"),
     )
-    _live_score_cache[contact_id] = (now, out)
+    _live_score_cache[cache_key] = (now, out)
     return out
 
 
@@ -216,14 +264,18 @@ def _deep_report_out(contact: models.Contact, result: dict, generated_at: dateti
 
 
 @router.post("/{contact_id}/deep-report", response_model=schemas.DeepReportOut)
-async def generate_deep_report(contact_id: int, db: Session = Depends(get_db)):
+async def generate_deep_report(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """Развёрнутый AI-разбор переписки (инициатива/вложенность/флирт/красные
     и зелёные флаги/ошибки/рекомендации) — только по явному запросу
     пользователя, требует настроенный Gemini. В отличие от /analyze, у
     этого отчёта нет локального аналога-заменителя: если Gemini недоступна,
     возвращаем понятную ошибку, а не молча урезанный результат.
     """
-    contact = _get_or_404(db, contact_id)
+    contact = _get_or_404(db, current_user.id, contact_id)
     if config.AI_PROVIDER != "gemini" or not config.GEMINI_API_KEY:
         raise HTTPException(
             status_code=400,
@@ -233,7 +285,7 @@ async def generate_deep_report(contact_id: int, db: Session = Depends(get_db)):
     raw_messages: list = []
     if contact.telegram_id:
         try:
-            raw_messages = await telegram_service.get_messages(contact.telegram_id, limit=300)
+            raw_messages = await get_telegram_service(current_user.id).get_messages(contact.telegram_id, limit=300)
         except TelegramAuthError:
             raw_messages = []
 
@@ -254,10 +306,14 @@ async def generate_deep_report(contact_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{contact_id}/deep-report", response_model=schemas.DeepReportOut)
-def get_deep_report(contact_id: int, db: Session = Depends(get_db)):
+def get_deep_report(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """Возвращает последний сохранённый глубокий отчёт без пересчёта —
     для восстановления после перезагрузки страницы."""
-    contact = _get_or_404(db, contact_id)
+    contact = _get_or_404(db, current_user.id, contact_id)
     result = contact.deep_report
     if result is None:
         raise HTTPException(status_code=404, detail="Глубокий отчёт ещё не запускался.")
@@ -281,31 +337,39 @@ def _overview_out(contact_id: int, result: dict, generated_at: datetime) -> sche
 
 
 @router.post("/{contact_id}/overview", response_model=schemas.AIOverviewOut)
-async def generate_overview(contact_id: int, db: Session = Depends(get_db)):
+async def generate_overview(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """Строит новый снимок AI Overview: текущее состояние + дерево
     возможных сценариев (см. backend/ai_overview.py). В отличие от
     /deep-report не требует настроенного Gemini — при его отсутствии
     честно возвращает пустой сценарий с source="local", не 400/502,
     т.к. факты и события пользователя всё равно есть смысл увидеть."""
-    contact = _get_or_404(db, contact_id)
+    contact = _get_or_404(db, current_user.id, contact_id)
 
     raw_messages: list = []
     if contact.telegram_id:
         try:
-            raw_messages = await telegram_service.get_messages(contact.telegram_id, limit=300)
+            raw_messages = await get_telegram_service(current_user.id).get_messages(contact.telegram_id, limit=300)
         except TelegramAuthError:
             raw_messages = []
 
-    result = await ai_overview.build_overview(db, contact, raw_messages)
-    row = crud.save_ai_overview(db, contact_id, result)
+    result = await ai_overview.build_overview(db, current_user.id, contact, raw_messages)
+    row = crud.save_ai_overview(db, current_user.id, contact_id, result)
     return _overview_out(contact_id, result, row.created_at)
 
 
 @router.get("/{contact_id}/overview", response_model=schemas.AIOverviewOut)
-def get_overview(contact_id: int, db: Session = Depends(get_db)):
+def get_overview(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """Возвращает последний сохранённый снимок AI Overview без пересчёта."""
-    contact = _get_or_404(db, contact_id)
-    row = crud.get_latest_ai_overview(db, contact_id)
+    contact = _get_or_404(db, current_user.id, contact_id)
+    row = crud.get_latest_ai_overview(db, current_user.id, contact_id)
     if row is None:
         raise HTTPException(status_code=404, detail="AI Overview ещё не запускался.")
     result = {
@@ -323,7 +387,11 @@ def get_overview(contact_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{contact_id}/full-scan", response_model=schemas.FullAiScanOut)
-async def full_ai_scan(contact_id: int, db: Session = Depends(get_db)):
+async def full_ai_scan(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     """Единая кнопка "Полный AI-анализ": запускает Contact Intelligence,
     Глубокий AI-отчёт и AI Overview за один проход — с одним походом в
     Telegram за перепиской вместо трёх (каждый из отдельных эндпоинтов
@@ -334,12 +402,12 @@ async def full_ai_scan(contact_id: int, db: Session = Depends(get_db)):
     пропускается (deep_report=None, причина — в deep_report_skipped_reason),
     а не роняет весь запрос, в отличие от отдельного эндпоинта /deep-report.
     """
-    contact = _get_or_404(db, contact_id)
+    contact = _get_or_404(db, current_user.id, contact_id)
 
     raw_messages: list = []
     if contact.telegram_id:
         try:
-            raw_messages = await telegram_service.get_messages(contact.telegram_id, limit=300)
+            raw_messages = await get_telegram_service(current_user.id).get_messages(contact.telegram_id, limit=300)
         except TelegramAuthError:
             raw_messages = []
 
@@ -357,7 +425,7 @@ async def full_ai_scan(contact_id: int, db: Session = Depends(get_db)):
         analysis_result["ai_source"] = config.AI_PROVIDER
     crud.save_analysis(db, contact, analysis_result)
     crud.add_interaction(
-        db, contact.id,
+        db, current_user.id, contact.id,
         schemas.InteractionCreate(
             note=f"AI-анализ: {analysis_result['interest_category']} ({analysis_result['interest_score']}/100). "
                  f"{analysis_result['ai_summary']}",
@@ -388,8 +456,8 @@ async def full_ai_scan(contact_id: int, db: Session = Depends(get_db)):
     # 3. AI Overview — сам сканирует хвост переписки на факты/планы и
     # сохраняет их в Память контакта (см. ai_overview._scan_chat_for_facts),
     # затем строит картину состояния + сценарии по всему собранному.
-    overview_result = await ai_overview.build_overview(db, contact, raw_messages)
-    overview_row = crud.save_ai_overview(db, contact_id, overview_result)
+    overview_result = await ai_overview.build_overview(db, current_user.id, contact, raw_messages)
+    overview_row = crud.save_ai_overview(db, current_user.id, contact_id, overview_result)
     overview_out = _overview_out(contact_id, overview_result, overview_row.created_at)
     overview_out.new_facts_count = overview_result.get("new_facts_count", 0)
 
@@ -402,13 +470,21 @@ async def full_ai_scan(contact_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{contact_id}/apply-suggested-status", response_model=schemas.ContactDetailOut)
-def apply_suggested_status(contact_id: int, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
-    crud.apply_suggested_status(db, contact)
-    return crud.get_contact(db, contact_id)
+def apply_suggested_status(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
+    crud.apply_suggested_status(db, current_user.id, contact)
+    return crud.get_contact(db, current_user.id, contact_id)
 
 
 @router.get("/{contact_id}/timeline", response_model=List[schemas.TimelineEventOut])
-def get_timeline(contact_id: int, db: Session = Depends(get_db)):
-    contact = _get_or_404(db, contact_id)
+def get_timeline(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    contact = _get_or_404(db, current_user.id, contact_id)
     return crud.get_timeline(db, contact)

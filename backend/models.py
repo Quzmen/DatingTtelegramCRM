@@ -58,20 +58,37 @@ contact_tags = Table(
 
 class Tag(Base):
     __tablename__ = "tags"
+    __table_args__ = (
+        # У каждого пользователя свой набор тегов — раньше name было
+        # unique глобально, что в многопользовательском режиме означало
+        # бы, что тег "клиент", созданный одним пользователем, был бы
+        # недоступен всем остальным.
+        UniqueConstraint("user_id", "name", name="uq_tag_user_name"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50), unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    name = Column(String(50), nullable=False, index=True)
 
     contacts = relationship("Contact", secondary=contact_tags, back_populates="tags")
 
 
 class Contact(Base):
     __tablename__ = "contacts"
+    __table_args__ = (
+        # Раньше telegram_id было unique глобально — в многопользовательском
+        # режиме это ломается на первом же случае, когда два разных
+        # пользователя CRM оба знакомы с одним и тем же человеком в
+        # Telegram (обычный случай, не крайний). Уникальность теперь
+        # только в пределах одного пользователя.
+        UniqueConstraint("user_id", "telegram_id", name="uq_contact_user_telegram_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(150), nullable=False, index=True)
     username = Column(String(100), nullable=True, index=True)
-    telegram_id = Column(BigInteger, nullable=True, unique=True, index=True)  # id из аккаунта Telegram, если контакт импортирован (может превышать 2^31, поэтому BigInteger)
+    telegram_id = Column(BigInteger, nullable=True, index=True)  # id из аккаунта Telegram, если контакт импортирован (может превышать 2^31, поэтому BigInteger)
     photo_url = Column(String(500), nullable=True)
     source = Column(String(200), nullable=True)          # источник знакомства
     status = Column(Enum(ContactStatus), default=ContactStatus.NEW, nullable=False, index=True)
@@ -144,6 +161,7 @@ class Interaction(Base):
     __tablename__ = "interactions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
     occurred_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     note = Column(Text, nullable=False)
@@ -181,6 +199,7 @@ class AIMemoryItem(Base):
     __tablename__ = "ai_memory_items"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     kind = Column(Enum(AIMemoryKind), default=AIMemoryKind.FACT, nullable=False, index=True)
     title = Column(String(300), nullable=False)
     details = Column(Text, nullable=True)
@@ -211,6 +230,7 @@ class AIPattern(Base):
     __tablename__ = "ai_patterns"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(300), nullable=False)
     description = Column(Text, nullable=True)
     confidence = Column(Float, default=0.5, nullable=False)  # 0..1 — насколько AI уверен в закономерности
@@ -233,6 +253,7 @@ class AIDecision(Base):
     __tablename__ = "ai_decisions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     situation = Column(Text, nullable=False)          # описание ситуации/выбора от пользователя
     options_json = Column(Text, nullable=False)        # варианты + сгенерированные последствия, см. schemas.AIDecisionOption
     chosen_option = Column(String(300), nullable=True)  # что в итоге выбрал пользователь (опционально, для истории)
@@ -254,6 +275,7 @@ class AIOverviewSnapshot(Base):
     __tablename__ = "ai_overview_snapshots"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
 
     current_state = Column(Text, nullable=False)          # краткая картина текущего состояния
@@ -314,16 +336,55 @@ class GeminiCallLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
+class User(Base):
+    """Пользователь CRM. Отдельной регистрации/пароля нет — учётная
+    запись создаётся автоматически при первом успешном входе через
+    Telegram (см. routers/auth.py) и однозначно определяется
+    telegram_id самого аккаунта, которым вошли."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    name = Column(String(150), nullable=True)
+    username = Column(String(100), nullable=True)
+    phone = Column(String(30), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+
+
+class UserSession(Base):
+    """Сессия входа в CRM — непрозрачный токен в httponly cookie,
+    выдаётся после успешной авторизации через Telegram (см.
+    backend/auth.py). Отдельного логина/пароля в CRM нет — это
+    единственный механизм "вспомнить, кто уже вошёл"."""
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String(64), unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+
+
 class TelegramSettings(Base):
     """Хранит StringSession Telethon в БД (а не в файле на диске), чтобы
     авторизация переживала перезапуски Render, редеплои и пересборку
     Docker-контейнера — файловая система контейнера эфемерна, а БД
-    (Supabase Postgres) — нет. Приложение работает с одним Telegram-
-    аккаунтом на CRM, поэтому строк здесь всегда 0 или 1 (см.
-    crud.get_telegram_session_string / save_telegram_session_string)."""
+    (Supabase Postgres) — нет.
+
+    user_id ЕСТЬ NULLABLE ради обратной совместимости с базами, где
+    приложение работало ещё в однопользовательском режиме (см.
+    миграцию в database.run_migrations): такая "ничья" строка с
+    user_id IS NULL — это сессия старого единственного аккаунта,
+    переносится на первого вошедшего пользователя следующим входом.
+    В новом многопользовательском режиме у каждого пользователя ровно
+    одна строка здесь (unique по user_id)."""
     __tablename__ = "telegram_settings"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=True, index=True)
     session_string = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -338,6 +399,7 @@ class Folder(Base):
     __tablename__ = "folders"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(60), nullable=False)
     color = Column(String(20), nullable=False, default="#6C8EF5")   # hex-код акцентного цвета
     icon = Column(String(16), nullable=True)                        # emoji, напр. "🔥"
@@ -361,9 +423,17 @@ class Dialog(Base):
     (из crud.add_interaction или кликом во фронтенде) и был не связан
     с реальной перепиской в Telegram."""
     __tablename__ = "dialogs"
+    __table_args__ = (
+        # Раньше telegram_id (собеседника) был unique глобально — ломается,
+        # как только два разных пользователя CRM переписываются с одним и
+        # тем же человеком в Telegram, что в многопользовательском режиме
+        # является нормой, а не крайним случаем.
+        UniqueConstraint("user_id", "telegram_id", name="uq_dialog_user_telegram_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)  # id собеседника
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)  # id собеседника
     contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
     folder_id = Column(Integer, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True)
 
@@ -390,10 +460,14 @@ class Message(Base):
     всегда делает upsert по этой паре, а не слепой INSERT."""
     __tablename__ = "messages"
     __table_args__ = (
-        UniqueConstraint("dialog_telegram_id", "message_id", name="uq_message_dialog_msgid"),
+        # Как и у Dialog/Contact выше: dialog_telegram_id сам по себе не
+        # уникален глобально в многопользовательском режиме, поэтому
+        # дедупликация (Баг №2: "возможны дубли") теперь по тройке.
+        UniqueConstraint("user_id", "dialog_telegram_id", "message_id", name="uq_message_user_dialog_msgid"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     dialog_telegram_id = Column(BigInteger, nullable=False, index=True)
     message_id = Column(Integer, nullable=False)  # id сообщения внутри чата в Telegram
 
@@ -443,6 +517,7 @@ class Campaign(Base):
     __tablename__ = "campaigns"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(150), nullable=False)
     status = Column(Enum(CampaignStatus), default=CampaignStatus.DRAFT, nullable=False, index=True)
 
@@ -493,6 +568,7 @@ class CampaignLog(Base):
     __tablename__ = "campaign_logs"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     campaign_id = Column(Integer, ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
     telegram_id = Column(BigInteger, nullable=False, index=True)
     processed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -518,6 +594,7 @@ class MediaFolder(Base):
     __tablename__ = "media_folders"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(60), nullable=False)
     color = Column(String(20), nullable=False, default="#6C8EF5")
     icon = Column(String(16), nullable=True)
@@ -536,6 +613,7 @@ class MediaFile(Base):
     __tablename__ = "media_files"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     original_name = Column(String(300), nullable=False)   # как назывался файл при загрузке / текущее отображаемое имя
     stored_name = Column(String(300), nullable=False, unique=True)  # реальное имя файла на диске (уникальное, коллизии исключены)
     kind = Column(Enum(MediaKind), nullable=False, default=MediaKind.DOCUMENT, index=True)
@@ -567,6 +645,7 @@ class MediaUsage(Base):
     __tablename__ = "media_usages"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     media_id = Column(Integer, ForeignKey("media_files.id", ondelete="CASCADE"), nullable=False, index=True)
     telegram_id = Column(BigInteger, nullable=False, index=True)
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)

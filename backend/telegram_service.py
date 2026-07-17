@@ -1,24 +1,37 @@
 """
-Обёртка над Telethon: один клиент на всё приложение, авторизованный
-под тем Telegram-аккаунтом, из которого пользователь входит через
-экран "Telegram" в интерфейсе.
+Обёртка над Telethon.
 
-CRM работает только с одним авторизованным аккаунтом одновременно —
-это не мультиаккаунтный сервис.
+ВАЖНО (переход на многопользовательский режим, см. routers/auth.py):
+теперь один экземпляр TelegramService = один Telegram-клиент ОДНОГО
+пользователя CRM, а не общий на всё приложение. За выдачу и
+переиспользование экземпляров отвечает get_telegram_service(user_id)
+внизу файла — она держит по одному живому TelegramService на каждого
+залогиненного пользователя (пока процесс жив; сама сессия Telethon
+переживает рестарт через БД, см. ниже).
 
 Сессия Telethon хранится не в файле на диске (файловая система
 контейнера на Render эфемерна и сбрасывается при каждом
 рестарте/редеплое), а как StringSession в таблице telegram_settings
 той же БД, что и остальные данные CRM (см. crud.py,
-database.get_db/SessionLocal). После успешного входа переавторизация
-не требуется, пока пользователь сам не нажмёт "выйти" — сессия
-переживает перезапуски и пересборку контейнера.
+database.get_db/SessionLocal) — теперь по одной строке НА
+ПОЛЬЗОВАТЕЛЯ (telegram_settings.user_id), а не одной строке на всё
+приложение. После успешного входа переавторизация не требуется, пока
+пользователь сам не нажмёт "выйти" — сессия переживает перезапуски и
+пересборку контейнера.
 
 Помимо базовой авторизации и отправки текста, сервис умеет то, что
 нужно полноценному мессенджеру поверх Telegram: диалоги, вложения
 (фото/голосовые/документы), ответы, пересылку, редактирование,
 удаление, закрепление и "живые" статусы (онлайн / последний визит /
 печатает…) через фоновый обработчик событий Telethon.
+
+Модуль по-прежнему экспортирует module-level `telegram_service`
+(user_id=None, "ничья" сессия) — это временная подпорка для
+эндпоинтов, ещё не переведённых на per-user клиент через
+get_telegram_service(current_user.id) (см. TODO в routers/telegram.py
+и остальных роутерах, которые пока используют глобальный объект;
+это следующий этап миграции на многопользовательский режим, а не
+постоянное решение).
 """
 import asyncio
 import logging
@@ -70,7 +83,12 @@ async def _with_timeout(coro, action: str):
 
 
 class TelegramService:
-    def __init__(self):
+    def __init__(self, user_id: Optional[int] = None):
+        # user_id=None — временный режим совместимости для кода,
+        # ещё не переведённого на get_telegram_service(current_user.id)
+        # (см. module docstring выше). Читает/пишет "ничью" строку
+        # telegram_settings с user_id IS NULL.
+        self.user_id = user_id
         self._client: Optional[TelegramClient] = None
         self._lock = asyncio.Lock()
         self._phone: Optional[str] = None
@@ -81,21 +99,21 @@ class TelegramService:
         self._presence: dict = {}
         self._handlers_registered = False
 
-    @staticmethod
-    def _load_session_string() -> str:
-        """Читает сохранённую StringSession из БД. Пустая строка —
-        как и пустой файл сессии раньше — означает "аккаунт ещё не
-        авторизован", Telethon в этом случае создаёт новую сессию."""
+    def _load_session_string(self) -> str:
+        """Читает сохранённую StringSession этого пользователя из БД.
+        Пустая строка — как и пустой файл сессии раньше — означает
+        "аккаунт ещё не авторизован", Telethon в этом случае создаёт
+        новую сессию."""
         db = SessionLocal()
         try:
-            return crud.get_telegram_session_string(db) or ""
+            return crud.get_telegram_session_string(db, self.user_id) or ""
         finally:
             db.close()
 
     def _persist_session(self) -> None:
         """Сохраняет текущую StringSession клиента в БД — вызывается
-        сразу после успешного /api/telegram/sign-in, чтобы сессия
-        пережила следующий рестарт/редеплой контейнера на Render."""
+        сразу после успешного входа, чтобы сессия пережила следующий
+        рестарт/редеплой контейнера на Render."""
         if self._client is None:
             return
         session_string = self._client.session.save()
@@ -103,15 +121,14 @@ class TelegramService:
             return
         db = SessionLocal()
         try:
-            crud.save_telegram_session_string(db, session_string)
+            crud.save_telegram_session_string(db, self.user_id, session_string)
         finally:
             db.close()
 
-    @staticmethod
-    def _clear_persisted_session() -> None:
+    def _clear_persisted_session(self) -> None:
         db = SessionLocal()
         try:
-            crud.clear_telegram_session_string(db)
+            crud.clear_telegram_session_string(db, self.user_id)
         finally:
             db.close()
 
@@ -139,6 +156,12 @@ class TelegramService:
                 kwargs["proxy"] = config.PROXY
             session_string = self._load_session_string()
             self._client = TelegramClient(StringSession(session_string), config.API_ID, config.API_HASH, **kwargs)
+            # Обработчики событий Telethon (см. sync_service.py) получают
+            # только event, а не self -- у event есть event.client, поэтому
+            # кладём user_id прямо на клиент, чтобы обработчик знал, чью
+            # запись обновлять в Dialog/Message (см. models.py: обе таблицы
+            # теперь ключуются user_id, а не только telegram_id).
+            self._client.crm_user_id = self.user_id
         if not self._client.is_connected():
             try:
                 await asyncio.wait_for(self._client.connect(), timeout=config.CONNECT_TIMEOUT)
@@ -674,7 +697,7 @@ class TelegramService:
             pass
         db = SessionLocal()
         try:
-            crud.upsert_dialog(db, telegram_id, unread_count=0)
+            crud.upsert_dialog(db, self.user_id, telegram_id, unread_count=0)
         finally:
             db.close()
 
@@ -692,4 +715,50 @@ class TelegramService:
         return Path(path)
 
 
+# ---------------------------------------------------------------
+# Реестр экземпляров по пользователям (многопользовательский режим).
+#
+# По одному живому TelegramService на каждого залогиненного
+# пользователя, пока жив процесс — сама Telegram-сессия при этом не
+# теряется между процессами/рестартами, потому что персистится в БД
+# (см. TelegramService._load_session_string/_persist_session выше).
+# Не asyncio.Lock на весь реестр -- одновременный вызов на два разных
+# user_id не должен блокировать друг друга, а гонка на один и тот же
+# user_id (например, два вкладки одного пользователя одновременно)
+# просто создаст, в редком худшем случае, два экземпляра подряд —
+# не страшно, второй перезапишет первый в словаре, а следующий вызов
+# получит единственный актуальный.
+# ---------------------------------------------------------------
+_service_registry: dict[int, "TelegramService"] = {}
+
+
+def get_telegram_service(user_id: int) -> "TelegramService":
+    """Возвращает (создавая при необходимости) TelegramService для
+    конкретного пользователя CRM. Это основной способ получить сервис
+    для нового кода — см. routers/auth.py и Depends(get_current_user)
+    в остальных роутерах (миграция роутеров на этот способ — следующий
+    этап, см. module docstring)."""
+    service = _service_registry.get(user_id)
+    if service is None:
+        service = TelegramService(user_id)
+        _service_registry[user_id] = service
+    return service
+
+
+async def drop_telegram_service(user_id: int) -> None:
+    """Отключает и убирает из реестра клиента пользователя — вызывается
+    при выходе (logout), чтобы следующий вход начинался с чистого
+    клиента, а не с уже разлогиненного объекта в памяти."""
+    service = _service_registry.pop(user_id, None)
+    if service is not None and service._client is not None:
+        try:
+            await service._client.disconnect()
+        except Exception:
+            pass
+
+
+# Временная подпорка для эндпоинтов, ещё не переведённых на
+# get_telegram_service(current_user.id) — см. module docstring выше.
+# user_id=None означает "ничью" строку telegram_settings, которая
+# существовала до перехода на многопользовательский режим.
 telegram_service = TelegramService()

@@ -75,4 +75,13 @@ const App = (() => {
   return { switchView, goToContact, init, setContactsMode };
 })();
 
-document.addEventListener("DOMContentLoaded", App.init);
+document.addEventListener("DOMContentLoaded", () => {
+  // Точка входа теперь Auth.init() (см. js/auth.js) — она сама решает,
+  // показать ли экран логина, или (если cookie crm_session ещё
+  // валиден — автологин) сразу запустить App.init().
+  if (window.Auth) {
+    Auth.init();
+  } else {
+    App.init();
+  }
+});

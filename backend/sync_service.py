@@ -19,11 +19,17 @@ get_messages) была request-driven: фронтенд опрашивал REST-
 Этот модуль подписывается на события Telethon (новое сообщение, правка,
 удаление, прочтение) и пишет их в локальные таблицы Dialog/Message
 (backend/models.py) через crud.py -- независимо от того, открыт ли
-сейчас этот диалог в UI. REST-слой (telegram_service.py, routers/telegram.py)
-пока не тронут: следующая итерация переключит list_dialogs/get_messages
-на чтение из этого кэша вместо прямого похода в Telegram при каждом
-запросе -- это и даст "мгновенное обновление UI" и уберёт задержку/дубли
-на уровне API, о которых просили в багфиксах 2 и 3.
+сейчас этот диалог в UI.
+
+МНОГОПОЛЬЗОВАТЕЛЬСКИЙ РЕЖИМ: один процесс обслуживает по клиенту
+Telethon на каждого залогиненного пользователя CRM (см.
+telegram_service.get_telegram_service), поэтому каждому обработчику
+события нужно знать, ЧЕЙ это клиент, чтобы записать событие в Dialog/
+Message правильного пользователя, а не перепутать с чужим диалогом.
+Сам Telethon этого не передаёт (event несёт только сырые Telegram-id),
+поэтому user_id прибит прямо к объекту клиента атрибутом
+`crm_user_id` (см. TelegramService._get_client и routers/auth.sign_in)
+и читается отсюда через event.client.crm_user_id.
 """
 import logging
 from typing import Optional
@@ -47,8 +53,22 @@ def _kind_and_duration(message) -> tuple[str, Optional[int]]:
     return info["kind"], info.get("duration")
 
 
+def _event_user_id(event) -> Optional[int]:
+    user_id = getattr(event.client, "crm_user_id", None)
+    if user_id is None:
+        logger.warning(
+            "Событие Telethon без crm_user_id на клиенте (chat_id=%s) -- "
+            "пропускаем, чтобы не записать данные не в тот аккаунт.",
+            getattr(event, "chat_id", None),
+        )
+    return user_id
+
+
 async def _on_new_message(event) -> None:
     if not event.is_private:
+        return
+    user_id = _event_user_id(event)
+    if user_id is None:
         return
     m = event.message
     telegram_id = event.chat_id
@@ -58,16 +78,16 @@ async def _on_new_message(event) -> None:
     db = SessionLocal()
     try:
         crud.upsert_message(
-            db, telegram_id, m.id,
+            db, user_id, telegram_id, m.id,
             text=text, date=m.date, out=bool(m.out), kind=kind, duration=duration,
             status="sent" if m.out else None, edited=bool(m.edit_date),
         )
         crud.upsert_dialog(
-            db, telegram_id,
+            db, user_id, telegram_id,
             last_message_id=m.id, last_message_text=text, last_message_kind=kind,
             last_message_date=m.date, last_message_out=bool(m.out),
         )
-        crud.touch_contact_last_contact(db, telegram_id, m.date)
+        crud.touch_contact_last_contact(db, user_id, telegram_id, m.date)
 
         if not m.out:
             # Точный unread_count лучше всего знает сам Telegram (учитывает
@@ -75,8 +95,8 @@ async def _on_new_message(event) -> None:
             # NewMessage. Инкремент здесь -- честная оценка "+1 новое", а
             # events.MessageRead (см. ниже) и следующий full_sync поправят
             # значение, если оно разошлось.
-            dialog = crud.get_dialog_by_telegram_id(db, telegram_id)
-            crud.upsert_dialog(db, telegram_id, unread_count=(dialog.unread_count or 0) + 1 if dialog else 1)
+            dialog = crud.get_dialog_by_telegram_id(db, user_id, telegram_id)
+            crud.upsert_dialog(db, user_id, telegram_id, unread_count=(dialog.unread_count or 0) + 1 if dialog else 1)
     except Exception:
         logger.exception("Не удалось сохранить входящее событие NewMessage (chat_id=%s)", telegram_id)
     finally:
@@ -86,6 +106,9 @@ async def _on_new_message(event) -> None:
 async def _on_message_edited(event) -> None:
     if not event.is_private:
         return
+    user_id = _event_user_id(event)
+    if user_id is None:
+        return
     m = event.message
     telegram_id = event.chat_id
     kind, duration = _kind_and_duration(m)
@@ -94,14 +117,14 @@ async def _on_message_edited(event) -> None:
     db = SessionLocal()
     try:
         crud.upsert_message(
-            db, telegram_id, m.id,
+            db, user_id, telegram_id, m.id,
             text=text, date=m.date, out=bool(m.out), kind=kind, duration=duration,
             status="sent" if m.out else None, edited=True,
         )
         # upsert_dialog сам не перетрёт более свежее последнее сообщение
         # правкой старого -- см. проверку is_newer в crud.upsert_dialog.
         crud.upsert_dialog(
-            db, telegram_id,
+            db, user_id, telegram_id,
             last_message_id=m.id, last_message_text=text, last_message_kind=kind,
             last_message_date=m.date, last_message_out=bool(m.out),
         )
@@ -124,10 +147,13 @@ async def _on_message_deleted(event) -> None:
     telegram_id = getattr(event, "chat_id", None)
     if telegram_id is None:
         return
+    user_id = _event_user_id(event)
+    if user_id is None:
+        return
     db = SessionLocal()
     try:
         for message_id in event.deleted_ids:
-            crud.mark_message_deleted(db, telegram_id, message_id)
+            crud.mark_message_deleted(db, user_id, telegram_id, message_id)
     except Exception:
         logger.exception("Не удалось сохранить событие MessageDeleted (chat_id=%s)", telegram_id)
     finally:
@@ -137,17 +163,20 @@ async def _on_message_deleted(event) -> None:
 async def _on_message_read(event) -> None:
     if not event.is_private:
         return
+    user_id = _event_user_id(event)
+    if user_id is None:
+        return
     telegram_id = event.chat_id
     db = SessionLocal()
     try:
         if event.outbox:
             # Собеседник прочитал наши сообщения вплоть до max_id -- сразу
             # обновляем ✓ -> ✓✓, не дожидаясь следующего открытия диалога.
-            crud.mark_outbox_read(db, telegram_id, event.max_id)
+            crud.mark_outbox_read(db, user_id, telegram_id, event.max_id)
         if event.inbox:
             # Мы сами прочитали входящие (обычно вызвано mark_read при
             # открытии диалога) -- обнуляем счётчик непрочитанных.
-            crud.upsert_dialog(db, telegram_id, unread_count=0)
+            crud.upsert_dialog(db, user_id, telegram_id, unread_count=0)
     except Exception:
         logger.exception("Не удалось сохранить событие MessageRead (chat_id=%s)", telegram_id)
     finally:
@@ -166,11 +195,17 @@ def register_message_handlers(client) -> None:
 
 async def full_sync(client, limit: int = 200) -> None:
     """Полная синхронизация кэша диалогов из Telegram: вызывается один
-    раз при старте приложения (если аккаунт уже авторизован) и может
-    быть вызвана повторно вручную. Поднимает Contact.last_contact_at и
-    Dialog в консистентное состояние ещё до прихода первого живого
-    события -- без этого после каждого перезапуска сервера кэш был бы
-    пустым до первого нового сообщения в каждом диалоге."""
+    раз при старте приложения на каждого уже авторизованного
+    пользователя (и может быть вызвана повторно вручную). Поднимает
+    Contact.last_contact_at и Dialog в консистентное состояние ещё до
+    прихода первого живого события -- без этого после каждого
+    перезапуска сервера кэш был бы пустым до первого нового сообщения
+    в каждом диалоге."""
+    user_id = getattr(client, "crm_user_id", None)
+    if user_id is None:
+        logger.warning("full_sync вызван для клиента без crm_user_id -- пропускаем")
+        return
+
     dialogs = await client.get_dialogs(limit=limit)
     db = SessionLocal()
     try:
@@ -188,15 +223,15 @@ async def full_sync(client, limit: int = 200) -> None:
                 kind, _duration = _kind_and_duration(last_message)
 
             crud.upsert_dialog(
-                db, entity.id,
+                db, user_id, entity.id,
                 last_message_id=last_message.id if last_message else None,
                 last_message_text=text, last_message_kind=kind,
                 last_message_date=date, last_message_out=out,
                 unread_count=d.unread_count, pinned=d.pinned,
             )
             if date is not None:
-                crud.touch_contact_last_contact(db, entity.id, date)
+                crud.touch_contact_last_contact(db, user_id, entity.id, date)
     except Exception:
-        logger.exception("Не удалось выполнить full_sync диалогов")
+        logger.exception("Не удалось выполнить full_sync диалогов (user_id=%s)", user_id)
     finally:
         db.close()

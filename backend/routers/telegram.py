@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from .. import crud, schemas, models, config, media_manager
 from ..database import get_db
-from ..telegram_service import telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
+from ..auth import get_current_user
+from ..telegram_service import get_telegram_service, TelegramAuthError, BULK_SEND_DELAY_SECONDS
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
@@ -18,43 +19,45 @@ def _err(e: TelegramAuthError, code: int = 400):
 
 
 @router.get("/status", response_model=schemas.TelegramStatusOut)
-async def get_status():
-    return await telegram_service.status()
+async def get_status(current_user: models.User = Depends(get_current_user)):
+    return await get_telegram_service(current_user.id).status()
 
 
 @router.post("/send-code")
-async def send_code(data: schemas.TelegramSendCodeIn):
+async def send_code(data: schemas.TelegramSendCodeIn, current_user: models.User = Depends(get_current_user)):
     try:
-        await telegram_service.send_code(data.phone)
+        await get_telegram_service(current_user.id).send_code(data.phone)
     except TelegramAuthError as e:
         _err(e)
     return {"sent": True}
 
 
 @router.post("/sign-in", response_model=schemas.TelegramStatusOut)
-async def sign_in(data: schemas.TelegramSignInIn):
+async def sign_in(data: schemas.TelegramSignInIn, current_user: models.User = Depends(get_current_user)):
     try:
-        result = await telegram_service.sign_in(data.phone, data.code, data.password)
+        result = await get_telegram_service(current_user.id).sign_in(data.phone, data.code, data.password)
     except TelegramAuthError as e:
         _err(e)
     return result
 
 
 @router.post("/logout")
-async def logout():
-    await telegram_service.logout()
+async def logout(current_user: models.User = Depends(get_current_user)):
+    await get_telegram_service(current_user.id).logout()
     return {"authorized": False}
 
 
 @router.get("/contacts", response_model=List[schemas.TelegramContactOut])
-async def list_telegram_contacts(db: Session = Depends(get_db)):
+async def list_telegram_contacts(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     try:
-        contacts = await telegram_service.fetch_contacts()
+        contacts = await get_telegram_service(current_user.id).fetch_contacts()
     except TelegramAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
     existing_ids = {
-        row[0] for row in db.query(models.Contact.telegram_id).filter(models.Contact.telegram_id.isnot(None)).all()
+        row[0] for row in db.query(models.Contact.telegram_id)
+        .filter(models.Contact.telegram_id.isnot(None), models.Contact.user_id == current_user.id)
+        .all()
     }
     for c in contacts:
         c["already_imported"] = c["telegram_id"] in existing_ids
@@ -62,9 +65,11 @@ async def list_telegram_contacts(db: Session = Depends(get_db)):
 
 
 @router.post("/import", response_model=schemas.TelegramImportResultOut)
-async def import_contacts(data: schemas.TelegramImportIn, db: Session = Depends(get_db)):
+async def import_contacts(
+    data: schemas.TelegramImportIn, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user),
+):
     try:
-        all_contacts = await telegram_service.fetch_contacts()
+        all_contacts = await get_telegram_service(current_user.id).fetch_contacts()
     except TelegramAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
@@ -73,13 +78,13 @@ async def import_contacts(data: schemas.TelegramImportIn, db: Session = Depends(
     if not selected:
         raise HTTPException(status_code=400, detail="Ни один из выбранных контактов не найден в Telegram")
 
-    return crud.import_telegram_contacts(db, selected, data.default_status, data.tags or [])
+    return crud.import_telegram_contacts(db, current_user.id, selected, data.default_status, data.tags or [])
 
 
 @router.post("/resolve", response_model=schemas.TelegramUserOut)
-async def resolve_username(data: schemas.TelegramResolveIn):
+async def resolve_username(data: schemas.TelegramResolveIn, current_user: models.User = Depends(get_current_user)):
     try:
-        return await telegram_service.resolve_username(data.username)
+        return await get_telegram_service(current_user.id).resolve_username(data.username)
     except TelegramAuthError as e:
         _err(e)
 
@@ -89,9 +94,12 @@ async def resolve_username(data: schemas.TelegramResolveIn):
 # ---------------------------------------------------------------
 
 @router.get("/dialogs", response_model=List[schemas.TelegramDialogOut])
-async def list_dialogs(limit: int = 100, folder_id: Optional[int] = None, db: Session = Depends(get_db)):
+async def list_dialogs(
+    limit: int = 100, folder_id: Optional[int] = None,
+    db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user),
+):
     try:
-        dialogs = await telegram_service.list_dialogs(limit=limit)
+        dialogs = await get_telegram_service(current_user.id).list_dialogs(limit=limit)
     except TelegramAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
@@ -100,7 +108,7 @@ async def list_dialogs(limit: int = 100, folder_id: Optional[int] = None, db: Se
     # они хранятся отдельно в локальной таблице dialogs (models.Dialog).
     # Дозаполняем folder_id одним запросом и, если папка запрошена,
     # фильтруем результат по ней.
-    folder_map = crud.get_folder_ids_by_telegram_id(db)
+    folder_map = crud.get_folder_ids_by_telegram_id(db, current_user.id)
     for d in dialogs:
         d["folder_id"] = folder_map.get(d["telegram_id"])
 
@@ -111,17 +119,17 @@ async def list_dialogs(limit: int = 100, folder_id: Optional[int] = None, db: Se
 
 
 @router.get("/presence/{telegram_id}", response_model=schemas.TelegramPresenceOut)
-async def get_presence(telegram_id: int):
+async def get_presence(telegram_id: int, current_user: models.User = Depends(get_current_user)):
     try:
-        return await telegram_service.get_presence(telegram_id)
+        return await get_telegram_service(current_user.id).get_presence(telegram_id)
     except TelegramAuthError as e:
         _err(e)
 
 
 @router.get("/avatar/{telegram_id}")
-async def get_avatar(telegram_id: int):
+async def get_avatar(telegram_id: int, current_user: models.User = Depends(get_current_user)):
     try:
-        path = await telegram_service.get_avatar_path(telegram_id)
+        path = await get_telegram_service(current_user.id).get_avatar_path(telegram_id)
     except TelegramAuthError as e:
         _err(e)
     if not path or not Path(path).exists():
@@ -131,8 +139,8 @@ async def get_avatar(telegram_id: int):
 
 
 @router.post("/read/{telegram_id}")
-async def mark_read(telegram_id: int):
-    await telegram_service.mark_read(telegram_id)
+async def mark_read(telegram_id: int, current_user: models.User = Depends(get_current_user)):
+    await get_telegram_service(current_user.id).mark_read(telegram_id)
     return {"ok": True}
 
 
@@ -141,29 +149,35 @@ async def mark_read(telegram_id: int):
 # ---------------------------------------------------------------
 
 @router.get("/messages/{telegram_id}", response_model=List[schemas.TelegramMessageOut])
-async def get_messages(telegram_id: int, limit: int = 50):
+async def get_messages(telegram_id: int, limit: int = 50, current_user: models.User = Depends(get_current_user)):
     try:
-        return await telegram_service.get_messages(telegram_id, limit=limit)
+        return await get_telegram_service(current_user.id).get_messages(telegram_id, limit=limit)
     except TelegramAuthError as e:
         _err(e)
 
 
 @router.post("/messages/{telegram_id}", response_model=schemas.TelegramMessageOut)
-async def send_message(telegram_id: int, data: schemas.TelegramSendMessageIn):
+async def send_message(
+    telegram_id: int, data: schemas.TelegramSendMessageIn, current_user: models.User = Depends(get_current_user),
+):
     try:
-        return await telegram_service.send_message(telegram_id, data.text, reply_to=data.reply_to)
+        return await get_telegram_service(current_user.id).send_message(telegram_id, data.text, reply_to=data.reply_to)
     except TelegramAuthError as e:
         _err(e)
 
 
 @router.post("/bulk-send", response_model=schemas.TelegramBulkSendOut)
-async def bulk_send(data: schemas.TelegramBulkSendIn, background_tasks: BackgroundTasks):
+async def bulk_send(
+    data: schemas.TelegramBulkSendIn, background_tasks: BackgroundTasks,
+    current_user: models.User = Depends(get_current_user),
+):
     """Минимальная массовая отправка: список telegram_id + текст.
     Без сегментов/фильтров/шаблонов/статусов кампании — просто ставит
     рассылку в фон с паузой BULK_SEND_DELAY_SECONDS между сообщениями
     и сразу отвечает, не дожидаясь завершения (500 диалогов * 15с
     иначе держали бы запрос ~2 часа)."""
-    background_tasks.add_task(telegram_service.bulk_send, data.telegram_ids, data.text)
+    service = get_telegram_service(current_user.id)
+    background_tasks.add_task(service.bulk_send, data.telegram_ids, data.text)
     return schemas.TelegramBulkSendOut(
         queued=len(data.telegram_ids),
         delay_seconds=BULK_SEND_DELAY_SECONDS,
@@ -177,13 +191,14 @@ async def send_file(
     caption: Optional[str] = Form(None),
     reply_to: Optional[int] = Form(None),
     voice: bool = Form(False),
+    current_user: models.User = Depends(get_current_user),
 ):
     tmp_path = config.UPLOAD_TMP_DIR / f"{telegram_id}_{file.filename}"
     try:
         contents = await file.read()
         tmp_path.write_bytes(contents)
         kind = None if voice else media_manager.classify_kind(file.filename or "", file.content_type).value
-        result = await telegram_service.send_file(
+        result = await get_telegram_service(current_user.id).send_file(
             telegram_id, str(tmp_path), caption=caption, reply_to=reply_to, voice_note=voice, kind=kind,
         )
         return result
@@ -196,7 +211,8 @@ async def send_file(
 
 @router.post("/messages/{telegram_id}/media/{media_id}", response_model=schemas.TelegramMessageOut)
 async def send_media_from_library(
-    telegram_id: int, media_id: int, data: schemas.MediaSendIn, db: Session = Depends(get_db),
+    telegram_id: int, media_id: int, data: schemas.MediaSendIn,
+    db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user),
 ):
     """Отправка файла из встроенной медиатеки в диалог (раздел
     ГАЛЕРЕЯ В ЧАТЕ ТЗ) — используется и обычным чатом, и быстрыми
@@ -204,7 +220,7 @@ async def send_media_from_library(
     /messages/{telegram_id}/file, поэтому фото/видео и здесь уходят
     корректным методом API, а не как файл. После успешной отправки
     сразу пишет в историю использования (раздел ИСТОРИЯ ИСПОЛЬЗОВАНИЯ)."""
-    media = crud.get_media_file(db, media_id)
+    media = crud.get_media_file(db, current_user.id, media_id)
     if media is None:
         raise HTTPException(status_code=404, detail="Файл не найден в медиатеке")
     path = media_manager.file_path(media.stored_name)
@@ -215,16 +231,16 @@ async def send_media_from_library(
     # берём последний известный слепок этого файла из любой прошлой
     # отправки; send_file сам подстрахуется отправкой с диска, если
     # он уже истёк.
-    cached_file_id = crud.get_latest_media_file_id(db, media_id)
+    cached_file_id = crud.get_latest_media_file_id(db, current_user.id, media_id)
     try:
-        result = await telegram_service.send_file(
+        result = await get_telegram_service(current_user.id).send_file(
             telegram_id, str(path), caption=data.caption, reply_to=data.reply_to, kind=media.kind.value,
             cached_file_id=cached_file_id,
         )
     except TelegramAuthError as e:
         _err(e)
     crud.record_media_usage(
-        db, media_id, telegram_id, context="chat",
+        db, current_user.id, media_id, telegram_id, context="chat",
         telegram_message_id=result.get("id"),
         telegram_file_id=result.get("cache_file_id"),
         sent_kind=media.kind.value,
@@ -233,51 +249,59 @@ async def send_media_from_library(
 
 
 @router.patch("/messages/{telegram_id}/{message_id}", response_model=schemas.TelegramMessageOut)
-async def edit_message(telegram_id: int, message_id: int, data: schemas.TelegramEditMessageIn):
+async def edit_message(
+    telegram_id: int, message_id: int, data: schemas.TelegramEditMessageIn,
+    current_user: models.User = Depends(get_current_user),
+):
     try:
-        return await telegram_service.edit_message(telegram_id, message_id, data.text)
+        return await get_telegram_service(current_user.id).edit_message(telegram_id, message_id, data.text)
     except TelegramAuthError as e:
         _err(e)
 
 
 @router.delete("/messages/{telegram_id}/{message_id}", status_code=204)
-async def delete_message(telegram_id: int, message_id: int):
+async def delete_message(telegram_id: int, message_id: int, current_user: models.User = Depends(get_current_user)):
     try:
-        await telegram_service.delete_message(telegram_id, message_id)
+        await get_telegram_service(current_user.id).delete_message(telegram_id, message_id)
     except TelegramAuthError as e:
         _err(e)
 
 
 @router.post("/messages/{telegram_id}/{message_id}/pin")
-async def pin_message(telegram_id: int, message_id: int):
+async def pin_message(telegram_id: int, message_id: int, current_user: models.User = Depends(get_current_user)):
     try:
-        await telegram_service.pin_message(telegram_id, message_id)
+        await get_telegram_service(current_user.id).pin_message(telegram_id, message_id)
     except TelegramAuthError as e:
         _err(e)
     return {"ok": True}
 
 
 @router.post("/messages/{telegram_id}/unpin")
-async def unpin_message(telegram_id: int, message_id: Optional[int] = None):
+async def unpin_message(
+    telegram_id: int, message_id: Optional[int] = None, current_user: models.User = Depends(get_current_user),
+):
     try:
-        await telegram_service.unpin_message(telegram_id, message_id)
+        await get_telegram_service(current_user.id).unpin_message(telegram_id, message_id)
     except TelegramAuthError as e:
         _err(e)
     return {"ok": True}
 
 
 @router.post("/messages/{telegram_id}/{message_id}/forward", response_model=schemas.TelegramMessageOut)
-async def forward_message(telegram_id: int, message_id: int, data: schemas.TelegramForwardIn):
+async def forward_message(
+    telegram_id: int, message_id: int, data: schemas.TelegramForwardIn,
+    current_user: models.User = Depends(get_current_user),
+):
     try:
-        return await telegram_service.forward_message(telegram_id, message_id, data.to_telegram_id)
+        return await get_telegram_service(current_user.id).forward_message(telegram_id, message_id, data.to_telegram_id)
     except TelegramAuthError as e:
         _err(e)
 
 
 @router.get("/media/{telegram_id}/{message_id}")
-async def get_media(telegram_id: int, message_id: int):
+async def get_media(telegram_id: int, message_id: int, current_user: models.User = Depends(get_current_user)):
     try:
-        path = await telegram_service.download_media(telegram_id, message_id)
+        path = await get_telegram_service(current_user.id).download_media(telegram_id, message_id)
     except TelegramAuthError as e:
         _err(e)
     mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
