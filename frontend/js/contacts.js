@@ -816,6 +816,7 @@ const Contacts = (() => {
       ccMessagesAbortController.abort();
       ccMessagesAbortController = null;
     }
+    ccMessagesInFlightDialogId = null;
     activeChatTelegramId = null;
   }
 
@@ -915,10 +916,16 @@ const Contacts = (() => {
   }
 
   let ccMessagesAbortController = null;
+  let ccMessagesInFlightDialogId = null;
 
   async function loadAndRenderMessages(c, { silent } = {}) {
     if (silent && API.isBackedOff("/telegram/messages")) return;
     const requestedDialogId = c.telegram_id;
+    // См. аналогичный комментарий в chatview.js loadMessages: тихий тик
+    // опроса, пока для этого же диалога уже летит предыдущий запрос,
+    // пропускаем, а не убиваем его новым -- иначе при медленном
+    // соединении (дольше 4с) сообщения не загрузятся никогда.
+    if (silent && ccMessagesInFlightDialogId === requestedDialogId) return;
     activeChatTelegramId = requestedDialogId;
     const container = document.getElementById("chatMessages");
     if (!container) return;
@@ -927,6 +934,7 @@ const Contacts = (() => {
     if (ccMessagesAbortController) ccMessagesAbortController.abort();
     const controller = new AbortController();
     ccMessagesAbortController = controller;
+    ccMessagesInFlightDialogId = requestedDialogId;
 
     try {
       const fresh = await API.tgMessages(requestedDialogId, 50, controller.signal);
@@ -941,6 +949,8 @@ const Contacts = (() => {
       if (activeChatTelegramId !== requestedDialogId) return;
       container.innerHTML = `<div class="chat__empty">${Utils.escapeHtml(err.message || "Не удалось загрузить переписку")}</div>`;
       return;
+    } finally {
+      if (ccMessagesInFlightDialogId === requestedDialogId) ccMessagesInFlightDialogId = null;
     }
     stopChatPolling();
     activeChatTelegramId = requestedDialogId;

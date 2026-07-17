@@ -33,6 +33,7 @@ const ChatView = (() => {
 
   // Отмена устаревших запросов при смене диалога/частом опросе.
   let messagesAbortController = null;
+  let messagesInFlightDialogId = null; // диалог, для которого сейчас летит запрос сообщений (см. loadMessages)
   let dialogsAbortController = null;
   let lastDialogsFetchAt = 0;
   const DIALOGS_MIN_INTERVAL_MS = 30000;
@@ -944,6 +945,16 @@ const ChatView = (() => {
     if (!activeId) return;
     if (silent && API.isBackedOff("/telegram/messages")) return;
     const requestedDialogId = activeId;
+    // Раньше здесь на каждый тик безусловно abort()-или предыдущий ещё
+    // не завершившийся запрос и запускали новый -- если реальный
+    // round-trip до Telegram (особенно через медленный/нестабильный
+    // прокси) занимал дольше интервала опроса (3с), запрос никогда не
+    // успевал завершиться: его убивали раньше, чем приходил ответ, и
+    // так по кругу бесконечно (см. вечную "Загрузка переписки…" при
+    // медленном соединении). Тихий (фоновый) тик, пока для этого же
+    // диалога уже летит предыдущий запрос, просто пропускаем -- ждём
+    // его результата вместо того чтобы убивать и начинать заново.
+    if (silent && messagesInFlightDialogId === requestedDialogId) return;
     const box = $("threadMessages");
     const hasCached = !!(messagesByDialogId[requestedDialogId] && messagesByDialogId[requestedDialogId].length);
     // Есть кеш для этого диалога — показываем его сразу (уже сделано в
@@ -954,6 +965,7 @@ const ChatView = (() => {
     if (messagesAbortController) messagesAbortController.abort();
     const controller = new AbortController();
     messagesAbortController = controller;
+    messagesInFlightDialogId = requestedDialogId;
 
     try {
       const fresh = await API.tgMessages(requestedDialogId, 50, controller.signal);
@@ -967,6 +979,8 @@ const ChatView = (() => {
       if (API.isAbortError(err)) return;
       if (activeId !== requestedDialogId) return;
       if (!silent && box && !hasCached) box.innerHTML = `<div class="empty-col">${Utils.escapeHtml(err.message || "Не удалось загрузить переписку")}</div>`;
+    } finally {
+      if (messagesInFlightDialogId === requestedDialogId) messagesInFlightDialogId = null;
     }
   }
 
@@ -1005,6 +1019,7 @@ const ChatView = (() => {
   async function selectChat(id) {
     if (DEBUG_CHAT) console.log("SELECTED:", id);
     if (messagesAbortController) { messagesAbortController.abort(); messagesAbortController = null; }
+    messagesInFlightDialogId = null;
     activeId = id;
     Cache.setLastSync("lastOpenDialogId", id); // Этап 10: чтобы при следующем запуске открылся тот же чат
     activeDialog = findDialog(id);
