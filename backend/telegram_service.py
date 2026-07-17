@@ -428,8 +428,14 @@ class TelegramService:
             raise TelegramAuthError("Не удалось найти диалог с этим пользователем в Telegram")
 
         by_id = {m.id: m for m in messages}
-        pinned_id = await self._pinned_message_id(client, telegram_id)
-        read_outbox_max_id = await self._read_outbox_max_id(client, telegram_id)
+        # Закреплённое сообщение и статус прочтения не зависят друг от друга —
+        # раньше шли последовательно (await, потом ещё await), и на медленном
+        # канале до Telegram задержки складывались одна к другой, заметно
+        # растягивая открытие диалога. Запускаем оба запроса параллельно.
+        pinned_id, read_outbox_max_id = await asyncio.gather(
+            self._pinned_message_id(client, telegram_id),
+            self._read_outbox_max_id(client, telegram_id),
+        )
 
         out = []
         for m in reversed(list(messages)):
